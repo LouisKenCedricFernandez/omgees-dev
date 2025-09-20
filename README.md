@@ -1,4 +1,0 @@
-# OMGees
-OMGees Repository
-
-hello
