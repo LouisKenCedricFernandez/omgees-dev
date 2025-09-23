@@ -1,48 +1,48 @@
-import React, { useState, useEffect, use } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import RestockInventory from './RestockInventory';
 import axios from 'axios';
 
-function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
+const defaultInventory = []; // Empty array as default
+
+function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInitialLoad}) {
   const [stockFilter, setStockFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [supplierFilter, setSupplierFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('active'); // New filter for active/archived
   const [selectedProduct, setSelectedProduct] = useState(null);
   
   
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
-  const [restockingProduct, setRestockingProduct] = useState(null);
+  const [archivingProduct, setArchivingProduct] = useState(null); // Renamed from restockingProduct
 
-  // Initialize inventory from props or use default data
-  const defaultInventory = [
-    // data for database inventory structure
-  ];
+  const [inventory, setInventory] = useState(() => {
+    // Initialize with initialInventory if available, otherwise use defaultInventory
+    return initialInventory.length > 0 ? initialInventory : defaultInventory;
+  });
 
-  const [inventory, setInventory] = useState(
-    initialInventory.length > 0 ? initialInventory : defaultInventory
-  );
-  // Fetch inventory from backend on component mount
+// Fetch inventory from backend on component mount -nt
    useEffect(() => {
   axios.get('http://localhost:5000/inventory')
     .then(response => {
+      console.log('Fetched inventory:', response.data);
       if (response.data && Array.isArray(response.data)) {
         // Normalize each product
         const normalized = response.data.map(product => ({
           id: product.product_id,
-          //baseProductId: product.baseProductId ?? product.id ?? 0,
+          baseProductId: product.base_product_id ?? product.product_id ?? 0,
           name: product.product_name ?? "",
           category: product.product_category ?? "",
-          variant: product.productvariant ?? "",
+          variant: product.product_variant ?? "",
           image: product.image ?? "https://via.placeholder.com/150",
           description: product.product_description ?? "",
           supplier: product.product_supplier ?? "",
-          stock: product.stock ?? product.product_totalstock ?? 0,
-          sold: product.sold ?? product.product_totalsold ?? 0,
+          stock: product.product_totalstock ?? 0,
+          sold: product.product_totalsold ?? 0,
           lowStockThreshold: product.lowStockThreshold ?? 10,
-          status: product.product_status ?? "In Stock",
+          status: product.product_status ?? "Active Only",
           price: product.product_price ?? 0,
-          lastRestocked: product.lastRestocked ?? new Date().toISOString(),
-          //size: product.size ?? "",
+          lastRestocked: product.last_restocked ?? new Date().toISOString(),
         }));
         setInventory(normalized);
       }
@@ -52,22 +52,41 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
     });
   }, []);
 
-  // Update inventory when initialInventory prop changes (from parent state updates)
+  // Fixed useEffect to handle inventory synchronization without infinite loops
   useEffect(() => {
     if (initialInventory.length > 0) {
-      setInventory(initialInventory);
+      // Only update if the inventory has actually changed
+      const currentIds = inventory.map(item => item.id).sort().join(',');
+      const newIds = initialInventory.map(item => item.id).sort().join(',');
+      
+      if (currentIds !== newIds) {
+        setInventory(initialInventory);
+      }
     }
-  }, [initialInventory]);
+  }, [initialInventory, inventory]);
 
-  // Notify parent when inventory changes
+  // Clean up modal states when user changes
   useEffect(() => {
-    if (onInventoryUpdate) {
-      onInventoryUpdate(inventory);
-    }
-  }, [inventory, onInventoryUpdate]);
+    return () => {
+      setSelectedProduct(null);
+      setEditingProduct(null);
+      setArchivingProduct(null);
+    };
+  }, [user]);
+
+  useEffect(() => {
+  // Only run if currentInventory is empty and we have default data
+  if (initialInventory.length === 0 && defaultInventory.length > 0 && onInitialLoad) {
+    onInitialLoad(defaultInventory);
+  }
+  }, [initialInventory.length, onInitialLoad]);
 
   const handleInventoryChange = (updatedInventory) => {
     setInventory(updatedInventory);
+    // Call parent update function directly instead of through useEffect
+    if (onInventoryUpdate) {
+      onInventoryUpdate(updatedInventory);
+    }
   };
   
   const formatDate = (dateString) => {
@@ -85,39 +104,45 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
     return { status: 'In Stock', color: 'success' };
   };
 
-  // Get unique categories and suppliers for filter dropdowns
-  const categories = [...new Set(inventory.map(product => product.category))];
-  const suppliers = [...new Set(inventory.map(product => product.supplier))];
+  // Get unique categories and suppliers for filter dropdowns - memoized
+  const categories = useMemo(() => {
+    return [...new Set(inventory.map(product => product.category))];
+  }, [inventory]);
 
-  const filterProducts = () => {
+  const suppliers = useMemo(() => {
+    return [...new Set(inventory.map(product => product.supplier))];
+  }, [inventory]);
+
+  // Memoized filtered products to prevent unnecessary recalculations
+  const filteredProducts = useMemo(() => {
     return inventory.filter(product => {
       const categoryMatch = categoryFilter === 'all' || product.category === categoryFilter;
       const supplierMatch = supplierFilter === 'all' || product.supplier === supplierFilter;
+      const statusMatch = statusFilter === 'all' || product.status === statusFilter;
       
       if (stockFilter === 'all') {
-        return categoryMatch && supplierMatch;
+        return categoryMatch && supplierMatch && statusMatch;
       }
       
       const stockStatus = getStockStatus(product.stock, product.lowStockThreshold);
-      const statusMatch = 
+      const stockLevelMatch = 
         (stockFilter === 'normal' && stockStatus.status === 'In Stock') ||
         (stockFilter === 'low' && (stockStatus.status === 'Low Stock' || stockStatus.status === 'Medium Stock')) ||
         (stockFilter === 'out' && stockStatus.status === 'Out of Stock');
       
-      return categoryMatch && supplierMatch && statusMatch;
+      return categoryMatch && supplierMatch && statusMatch && stockLevelMatch;
     });
-  };
+  }, [inventory, stockFilter, categoryFilter, supplierFilter, statusFilter]);
 
   const resetFilters = () => {
     setStockFilter('all');
     setCategoryFilter('all');
     setSupplierFilter('all');
+    setStatusFilter('active');
   };
 
-  const filteredProducts = filterProducts();
-
-  // Group products by base product/brand for summary view
-  const getProductSummary = () => {
+  // Memoized product summary to prevent expensive recalculations
+  const productSummary = useMemo(() => {
     const groupedProducts = {};
     
     filteredProducts.forEach(product => {
@@ -130,13 +155,22 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
           variants: [],
           totalStock: 0,
           totalSold: 0,
-          overallStatus: 'In Stock'
+          overallStatus: 'In Stock',
+          hasArchivedVariants: false,
+          allVariantsArchived: true
         };
       }
       
       groupedProducts[key].variants.push(product);
       groupedProducts[key].totalStock += product.stock;
       groupedProducts[key].totalSold += product.sold;
+      
+      // Check for archived variants
+      if (product.status === 'inactive') {
+        groupedProducts[key].hasArchivedVariants = true;
+      } else {
+        groupedProducts[key].allVariantsArchived = false;
+      }
       
       // Product status or stock-level
       const variantStatus = getStockStatus(product.stock, product.lowStockThreshold);
@@ -147,25 +181,29 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
       } else if (variantStatus.status === 'Medium Stock' && groupedProducts[key].overallStatus === 'In Stock') {
         groupedProducts[key].overallStatus = 'Medium Stock';
       }
+      
+      // Override status if all variants are archived
+      if (groupedProducts[key].allVariantsArchived) {
+        groupedProducts[key].overallStatus = 'Archived';
+      }
     });
     
     return Object.values(groupedProducts);
-  };
-
-  const productSummary = getProductSummary();
+  }, [filteredProducts]);
 
   const getStatusColor = (status) => {
     switch (status) {
       case 'Out of Stock': return 'danger';
       case 'Low Stock': return 'warning';
       case 'Medium Stock': return 'info';
+      case 'Archived': return 'secondary';
       default: return 'success';
     }
   };
 
   const renderFilters = () => (
     <div className="row g-3 align-items-end">
-      <div className="col-md-3">
+      <div className="col-md-2">
         <label className="form-label fw-semibold">Stock Level</label>
         <select 
           className="form-select"
@@ -178,7 +216,7 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
           <option value="out">Out of Stock</option>
         </select>
       </div>
-      <div className="col-md-3">
+      <div className="col-md-2">
         <label className="form-label fw-semibold">Category</label>
         <select 
           className="form-select"
@@ -190,10 +228,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
             <option key={category} value={category}>
               {category ? category.charAt(0).toUpperCase() + category.slice(1) : ""}
             </option>
-        ))}
+          ))}
         </select>
       </div>
-      <div className="col-md-3">
+      <div className="col-md-2">
         <label className="form-label fw-semibold">Supplier</label>
         <select 
           className="form-select"
@@ -208,11 +246,27 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
           ))}
         </select>
       </div>
-      <div className="col-md-3">
+      <div className="col-md-2">
+        <label className="form-label fw-semibold">Status</label>
+        <select 
+          className="form-select"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+        >
+          <option value="all">All Products</option>
+          <option value="active">Active Only</option>
+          <option value="inactive">Archived Only</option>
+        </select>
+      </div>
+      <div className="col-md-4">
         <div className="d-flex gap-2">
           <button className="btn btn-outline-danger" onClick={resetFilters}>
             <i className="bi bi-arrow-clockwise"></i> Reset
           </button>
+          <div className="ms-auto d-flex gap-1">
+            <span className="badge bg-success">{inventory.filter(p => p.status === 'active').length} Active</span>
+            <span className="badge bg-secondary">{inventory.filter(p => p.status === 'inactive').length} Archived</span>
+          </div>
         </div>
       </div>
     </div>
@@ -233,12 +287,27 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
   );
 
   const renderTableRow = (productGroup) => (
-    <tr key={`${productGroup.baseProductId}-${productGroup.name}`}>
-      <td className="fw-semibold">{productGroup.name}</td>
+    <tr key={`${productGroup.baseProductId}-${productGroup.name}`} 
+        className={productGroup.allVariantsArchived ? 'table-secondary' : ''}>
+      <td className="fw-semibold">
+        {productGroup.name}
+        {productGroup.hasArchivedVariants && !productGroup.allVariantsArchived && (
+          <small className="text-muted d-block">
+            <i className="fas fa-info-circle me-1"></i>Contains archived variants
+          </small>
+        )}
+      </td>
       <td className="text-center">
         <span className="badge bg-secondary">{productGroup.category}</span>
       </td>
-      <td className="text-center">{productGroup.variants.length}</td>
+      <td className="text-center">
+        {productGroup.variants.length}
+        {productGroup.hasArchivedVariants && (
+          <small className="text-muted d-block">
+            {productGroup.variants.filter(v => v.status === 'active').length} active
+          </small>
+        )}
+      </td>
       <td className="text-center">{productGroup.totalStock}</td>
       <td className="text-center">{productGroup.totalSold}</td>
       <td className="text-center">
@@ -256,16 +325,16 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
             <i className="fas fa-eye"></i>
           </button>
           <button 
-            className="btn btn-sm btn-outline-success"
-            onClick={() => setRestockingProduct(productGroup)}
-            title="Restock"
+            className="btn btn-sm btn-outline-danger"
+            onClick={() => setArchivingProduct(productGroup.variants[0])}
+            title="Archive/Restore"
           >
-            <i className="fas fa-plus"></i>
+            <i className="fas fa-archive"></i>
           </button>
           <button 
             className="btn btn-sm btn-outline-warning"
             onClick={() => setEditingProduct(productGroup.variants[0])}
-            title="Edit"
+            title="Edit Product"
           >
             <i className="fas fa-edit"></i>
           </button>
@@ -330,6 +399,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
                         <td>{selectedProduct.variants.length}</td>
                       </tr>
                       <tr>
+                        <td><strong>Active Variants:</strong></td>
+                        <td>{selectedProduct.variants.filter(v => v.status === 'active').length}</td>
+                      </tr>
+                      <tr>
                         <td><strong>Overall Status:</strong></td>
                         <td>
                           <span className={`badge bg-${getStatusColor(selectedProduct.overallStatus)}`}>
@@ -370,8 +443,9 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
                       <tbody>
                         {selectedProduct.variants.map((variant) => {
                           const stockStatus = getStockStatus(variant.stock, variant.lowStockThreshold);
+                          const isArchived = variant.status === 'inactive';
                           return (
-                            <tr key={variant.id}>
+                            <tr key={variant.id} className={isArchived ? 'table-secondary' : ''}>
                               <td><strong>#{variant.id}</strong></td>
                               <td><strong>{variant.size}</strong></td>
                               <td>₱{variant.price.toLocaleString()}</td>
@@ -380,21 +454,26 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
                               <td>{variant.sold}</td>
                               <td>{formatDate(variant.lastRestocked)}</td>
                               <td>
-                                <span className={`badge bg-${stockStatus.color}`}>
-                                  {stockStatus.status}
-                                </span>
+                                <div className="d-flex flex-column gap-1">
+                                  <span className={`badge bg-${stockStatus.color}`}>
+                                    {stockStatus.status}
+                                  </span>
+                                  <span className={`badge bg-${isArchived ? 'secondary' : 'success'}`}>
+                                    {isArchived ? 'Archived' : 'Active'}
+                                  </span>
+                                </div>
                               </td>
                               <td>
                                 <div className="btn-group" role="group">
                                   <button 
-                                    className="btn btn-xs btn-outline-success"
+                                    className="btn btn-xs btn-outline-danger"
                                     onClick={() => {
-                                      setRestockingProduct(variant);
+                                      setArchivingProduct(variant);
                                       setSelectedProduct(null);
                                     }}
-                                    title="Restock"
+                                    title="Archive/Restore"
                                   >
-                                    <i className="fas fa-plus"></i>
+                                    <i className="fas fa-archive"></i>
                                   </button>
                                   <button 
                                     className="btn btn-xs btn-outline-primary"
@@ -450,7 +529,7 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
               {/* Inventory Header */}
               <div className="card-header bg-white border-0 pb-4">
                 <div className="d-flex justify-content-between align-items-center mb-3">
-                  <h2 className="mb-0">Inventory Overview</h2>
+                  <h2 className="mb-0">Inventory Management</h2>
                   <div className="d-flex gap-2 align-items-center">
                     <span className="badge bg-primary">{productSummary.length} product groups</span>
                     <span className="badge bg-info">{filteredProducts.length} total variants</span>
@@ -486,7 +565,7 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
       {/* For Product Details to show */}
       <ProductDetailsModal />
       
-      {/* RestockCenter handles all CRUD modals */}
+      {/* Archive Modal (formerly RestockInventory) */}
       <RestockInventory 
         inventory={inventory}
         setInventory={handleInventoryChange}
@@ -494,8 +573,8 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = []}) {
         setShowAddModal={setShowAddModal}
         editingProduct={editingProduct}
         setEditingProduct={setEditingProduct}
-        selectedProduct={restockingProduct}
-        setSelectedProduct={setRestockingProduct}
+        selectedProduct={archivingProduct}
+        setSelectedProduct={setArchivingProduct}
       />
     </div>
   );

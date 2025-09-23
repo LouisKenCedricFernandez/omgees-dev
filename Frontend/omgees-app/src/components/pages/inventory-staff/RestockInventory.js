@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
+
 function RestockInventory({ 
   inventory, 
   setInventory, 
@@ -13,7 +14,7 @@ function RestockInventory({
 }) {
 
   // CRUD Functions
-  const addProduct = (newProduct) => {
+  /*const addProduct = (newProduct) => {
     // Generate new ID based on baseProductId and existing variants
     const baseId = newProduct.baseProductId || Math.max(...inventory.map(p => p.baseProductId || 0), 0) + 1;
     const existingVariants = inventory.filter(p => p.baseProductId === baseId);
@@ -30,46 +31,63 @@ function RestockInventory({
 
     setInventory([...inventory, productWithId]);
     setShowAddModal(false);
+  };*/
+
+  // Update product function -nt
+const updateProduct = (updatedProduct) => {
+  const payload = {
+    product_id: updatedProduct.id,
+    updated_data: {
+      product_name: updatedProduct.name,
+      product_category: updatedProduct.category,
+      product_variant: updatedProduct.size,
+      product_totalstock: Number(updatedProduct.stock),
+      product_price: Number(updatedProduct.price),
+      product_description: updatedProduct.description,
+      product_supplier: updatedProduct.supplier,
+      product_totalsold: Number(updatedProduct.sold) || 0
+    }
   };
 
-  const updateProduct = (updatedProduct) => {
-    const processedData = {
-      ...updatedProduct,
-      price: Number(updatedProduct.price),
-      stock: Number(updatedProduct.stock),
-      lowStockThreshold: Number(updatedProduct.lowStockThreshold),
-      sold: Number(updatedProduct.sold)
-    };
-
-    setInventory(inventory.map(product => 
-      product.id === updatedProduct.id ? processedData : product
-    ));
-    setEditingProduct(null);
-  };
-
-  // Removed unused deleteProduct function
-
-  const restockProduct = async (productId, newStock) => {
-  try {
-    // Update in database
-    await axios.post('http://localhost:5000/re-stock', {
-      product_id: productId,
-      new_stock: newStock
+  axios.post('http://localhost:5000/update-stock', payload)
+    .then(response => {
+      setInventory(inventory.map(product =>
+        product.id === updatedProduct.id
+          ? { ...product, ...updatedProduct, stock: Number(updatedProduct.stock) }
+          : product
+      ));
+      setEditingProduct(null);
+    })
+    .catch(error => {
+      alert('Failed to update product!');
+      console.error(error);
     });
-    // Update in local state
+};
+
+
+
+  // Archive product function
+  const archiveProduct = (productId) => {
     setInventory(inventory.map(product => 
       product.id === productId ? {
         ...product,
-        stock: newStock,
-        lastRestocked: new Date().toISOString()
+        status: 'inactive',
+        archivedDate: new Date().toISOString()
       } : product
     ));
-  } catch (error) {
-    alert('Failed to update stock!');
-    console.error(error);
-  }
-};
+  };
 
+  // Restore product function (if needed later)
+  const restoreProduct = (productId) => {
+    setInventory(inventory.map(product => 
+      product.id === productId ? {
+        ...product,
+        status: 'active',
+        restoredDate: new Date().toISOString()
+      } : product
+    ));
+  };
+  
   const AddProductModal = () => {
     const [formData, setFormData] = useState({
       name: '',
@@ -84,42 +102,77 @@ function RestockInventory({
       baseProductId: null // Will be auto-generated or user can specify
     });
 
-    const handleSubmit = async (e) => {
-      e.preventDefault();
-      if (formData.name && formData.supplier && formData.size) {
-    // Send to backend
-      try {
-        const response = await axios.post('http://localhost:5000/add-product', {
-         product_name: formData.name,
-          product_category: formData.category,
-          product_variant: formData.size,
-          product_totalstock: formData.stock,
-          product_totalsold: 0,
-          product_description: formData.description,
-          product_supplier: formData.supplier,
-          product_price: formData.price,
-          product_status: 'In Stock'
-      });
-      // Optionally, fetch inventory again or add to local state
-      // Example: fetchInventory(); or setInventory([...inventory, response.data]);
-      setShowAddModal(false);
-    } catch (error) {
-      alert('Failed to add product!');
-      console.error(error);
-    }
-    // Reset form
-    setFormData({
-      name: '',
-      category: 'ingredients',
-      description: '',
-      image: 'https://via.placeholder.com/200x180/6C757D/white?text=New+Product',
-      supplier: '',
-      size: '',
-      price: 0,
-      stock: 0,
-      lowStockThreshold: 0,
-      baseProductId: null
+    // File upload states similar to checkout
+    const [productImage, setProductImage] = useState(null);
+    const [productImagePreview, setProductImagePreview] = useState(null);
+
+    const handleFileUpload = (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        // Validate file type
+        const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+        if (!validTypes.includes(file.type)) {
+          alert('Please select a valid image file (JPEG, PNG, GIF, or WebP)');
+          return;
+        }
+        
+        // Validate file size (max 5MB)
+        const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+        if (file.size > maxSize) {
+          alert('Image size should be less than 5MB');
+          return;
+        }
+        
+        setProductImage(file);
+        
+        // Create preview for image
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setProductImagePreview(reader.result);
+          };
+          reader.readAsDataURL(file);
+        } else {
+          setProductImagePreview(null);
+        }
+      }
+    };
+
+    // Add this inside your AddProductModal component
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+
+  const form = new FormData();
+  form.append('base_product_id', formData.baseProductId || '');
+  form.append('product_name', formData.name);
+  form.append('product_category', formData.category);
+  form.append('product_variant', formData.size);
+  form.append('product_totalstock', formData.stock);
+  form.append('product_totalsold', 0);
+  form.append('product_description', formData.description);
+  form.append('product_supplier', formData.supplier);
+  form.append('product_price', formData.price);
+  form.append('product_status', 'active');
+  form.append('last_restocked', new Date().toISOString());
+  if (productImage) {
+    form.append('product_image', productImage);
+  }
+
+  try {
+    const res = await fetch('http://localhost:5000/add-product', {
+      method: 'POST',
+      body: form,
     });
+    const data = await res.json();
+    if (data && !data.error) {
+      // Optionally refresh inventory from backend here
+      setShowAddModal(false);
+    } else {
+      alert('Failed to add product');
+    }
+  } catch (err) {
+    alert('Error adding product');
   }
 };
 
@@ -194,15 +247,39 @@ function RestockInventory({
                   </div>
                 </div>
 
+                {/* Updated Image Upload Section - Similar to checkout */}
                 <div className="row mb-3">
                   <div className="col-md-6">
-                    <label className="form-label">Image URL</label>
+                    <label className="form-label">Product Image</label>
                     <input
-                      type="text"
+                      type="file"
                       className="form-control"
-                      value={formData.image}
-                      onChange={(e) => setFormData({...formData, image: e.target.value})}
+                      id="productImageUpload"
+                      accept="image/*"
+                      onChange={handleFileUpload}
                     />
+                    <small className="form-text text-muted">
+                      Upload product image (JPEG, PNG, GIF, WebP - Max 5MB)
+                    </small>
+                    {productImage && (
+                      <div className="text-success small mt-2">
+                        <i className="fas fa-check me-1"></i>
+                        File uploaded: {productImage.name}
+                      </div>
+                    )}
+                    {productImagePreview && (
+                      <div className="mt-3">
+                        <label className="form-label small">Preview:</label>
+                        <div className="border rounded p-2">
+                          <img 
+                            src={productImagePreview} 
+                            alt="Product preview" 
+                            className="img-fluid"
+                            style={{ maxHeight: '150px', width: 'auto', borderRadius: '4px' }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="col-md-6">
                     <label className="form-label">Variant Size/Type *</label>
@@ -392,6 +469,23 @@ function RestockInventory({
                     />
                   </div>
                 </div>
+
+                <div className="row mb-3">
+                  <div className="col-md-6">
+                    <label className="form-label">Status</label>
+                    <select
+                      className="form-select"
+                      value={formData.status || 'active'}
+                      onChange={(e) => setFormData({...formData, status: e.target.value})}
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Archived</option>
+                    </select>
+                    <small className="form-text text-muted">
+                      {formData.status === 'inactive' ? 'This product is archived and hidden from customers/cashiers' : 'This product is visible to customers and cashiers'}
+                    </small>
+                  </div>
+                </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setEditingProduct(null)}>
@@ -408,275 +502,270 @@ function RestockInventory({
     );
   };
 
-  const RestockModal = () => {
-    const [stockUpdates, setStockUpdates] = useState({});
+const ArchiveModal = () => {
+  // Archive by baseProductId - much simpler function
+  const archiveProductByBaseId = (baseProductId) => {
+    setInventory(inventory.map(product => 
+      product.baseProductId === baseProductId ? {
+        ...product,
+        status: 'inactive',
+        archivedDate: new Date().toISOString()
+      } : product
+    ));
+  };
 
-    // Fixed useEffect - disable eslint warning for this specific case  
-    useEffect(() => {
-      if (selectedProduct) {
-        // If selectedProduct is a single product, create updates object
-        if (selectedProduct.id) {
-          setStockUpdates({
-            [selectedProduct.id]: selectedProduct.stock
-          });
-        } 
-        // If selectedProduct is a product group with variants
-        else if (selectedProduct.variants) {
-          const initialUpdates = {};
-          selectedProduct.variants.forEach(variant => {
-            initialUpdates[variant.id] = variant.stock;
-          });
-          setStockUpdates(initialUpdates);
-        }
-      } else {
-        setStockUpdates({});
-      }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedProduct]);
+  const restoreProductByBaseId = (baseProductId) => {
+    setInventory(inventory.map(product => 
+      product.baseProductId === baseProductId ? {
+        ...product,
+        status: 'active',
+        restoredDate: new Date().toISOString()
+      } : product
+    ));
+  };
 
-    const updateVariantStock = (variantId, newStock) => {
-      setStockUpdates(prev => ({
-        ...prev,
-        [variantId]: Number(newStock)
-      }));
-    };
+  const handleArchiveWholeProduct = () => {
+    if (!selectedProduct || !selectedProduct.variants) return;
+    
+    const baseProductId = selectedProduct.variants[0].baseProductId;
+    const productName = selectedProduct.name;
+    const variantCount = selectedProduct.variants.length;
+    
+    const confirmation = window.confirm(
+      `Are you sure you want to archive all ${variantCount} variants of "${productName}"? ` +
+      'Archived items will be hidden from customers and cashiers but can be restored later.'
+    );
 
-    const handleBulkRestock = () => {
-      Object.entries(stockUpdates).forEach(([variantId, newStock]) => {
-        const currentVariant = inventory.find(p => p.id === Number(variantId));
-        if (currentVariant && currentVariant.stock !== newStock) {
-          restockProduct(Number(variantId), newStock);
-        }
-      });
+    if (confirmation) {
+      archiveProductByBaseId(baseProductId);
       setSelectedProduct(null);
-      setStockUpdates({});
-    };
+      alert(`All variants of "${productName}" archived successfully.`);
+    }
+  };
 
-    const getTotalStockChange = () => {
-      let totalChange = 0;
-      Object.entries(stockUpdates).forEach(([variantId, newStock]) => {
-        const currentVariant = inventory.find(p => p.id === Number(variantId));
-        if (currentVariant) {
-          totalChange += newStock - currentVariant.stock;
-        }
-      });
-      return totalChange;
-    };
+  const handleRestoreWholeProduct = () => {
+    if (!selectedProduct || !selectedProduct.variants) return;
+    
+    const baseProductId = selectedProduct.variants[0].baseProductId;
+    const productName = selectedProduct.name;
+    const variantCount = selectedProduct.variants.length;
+    
+    const confirmation = window.confirm(
+      `Are you sure you want to restore all ${variantCount} variants of "${productName}"? ` +
+      'They will become visible to customers and cashiers again.'
+    );
 
-    if (!selectedProduct) return null;
+    if (confirmation) {
+      restoreProductByBaseId(baseProductId);
+      setSelectedProduct(null);
+      alert(`All variants of "${productName}" restored successfully.`);
+    }
+  };
 
-    // Handle single product variant
-    if (selectedProduct.id) {
-      const newStock = stockUpdates[selectedProduct.id] || selectedProduct.stock;
-      const stockChange = newStock - selectedProduct.stock;
+  if (!selectedProduct) return null;
 
-      return (
-        <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
-          <div className="modal-dialog modal-md">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Restock Product Variant</h5>
-                <button type="button" className="btn-close" onClick={() => setSelectedProduct(null)}></button>
+  // Handle single product variant
+  if (selectedProduct.id) {
+    const isArchived = selectedProduct.status === 'inactive';
+    
+    return (
+      <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+        <div className="modal-dialog modal-md">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title">
+                {isArchived ? 'Restore Product' : 'Archive Product'}
+              </h5>
+              <button type="button" className="btn-close" onClick={() => setSelectedProduct(null)}></button>
+            </div>
+            <div className="modal-body">
+              <div className="text-center mb-4">
+                <img 
+                  src={selectedProduct.image} 
+                  alt={selectedProduct.name}
+                  className="img-thumbnail mb-3"
+                  style={{width: '120px', height: '120px', objectFit: 'cover'}}
+                />
+                <h6>{selectedProduct.name}</h6>
+                <p className="text-muted mb-1">{selectedProduct.size}</p>
+                <small className="text-muted">Product ID: #{selectedProduct.id}</small>
               </div>
-              <div className="modal-body">
-                <div className="text-center mb-4">
-                  <img 
-                    src={selectedProduct.image} 
-                    alt={selectedProduct.name}
-                    className="img-thumbnail mb-3"
-                    style={{width: '120px', height: '120px', objectFit: 'cover'}}
+              
+              <div className="row mb-3">
+                <div className="col-6">
+                  <label className="form-label">Current Stock</label>
+                  <input type="text" className="form-control" value={selectedProduct.stock} disabled />
+                </div>
+                <div className="col-6">
+                  <label className="form-label">Status</label>
+                  <input 
+                    type="text" 
+                    className={`form-control ${isArchived ? 'text-danger' : 'text-success'}`}
+                    value={isArchived ? 'Archived' : 'Active'} 
+                    disabled 
                   />
-                  <h6>{selectedProduct.name}</h6>
-                  <p className="text-muted mb-1">{selectedProduct.size}</p>
-                  <small className="text-muted">Product ID: #{selectedProduct.id}</small>
-                </div>
-                
-                <div className="row mb-3">
-                  <div className="col-6">
-                    <label className="form-label">Current Stock</label>
-                    <input type="text" className="form-control" value={selectedProduct.stock} disabled />
-                  </div>
-                  <div className="col-6">
-                    <label className="form-label">Low Stock Threshold</label>
-                    <input type="text" className="form-control" value={selectedProduct.lowStockThreshold} disabled />
-                  </div>
-                </div>
-                
-                <div className="mb-3">
-                  <label className="form-label">New Stock Level</label>
-                  <input
-                    type="number"
-                    className="form-control"
-                    value={newStock}
-                    onChange={(e) => updateVariantStock(selectedProduct.id, e.target.value)}
-                    min="0"
-                  />
-                </div>
-                
-                <div className={`alert ${stockChange >= 0 ? 'alert-info' : 'alert-warning'}`}>
-                  <small>
-                    <strong>Stock Change:</strong> {stockChange >= 0 ? '+' : ''}{stockChange} units
-                  </small>
                 </div>
               </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>
-                  Cancel
-                </button>
+              
+              <div className={`alert ${isArchived ? 'alert-info' : 'alert-warning'}`}>
+                <i className={`fas ${isArchived ? 'fa-info-circle' : 'fa-exclamation-triangle'} me-2`}></i>
+                {isArchived ? (
+                  <span>This product is currently archived. Restoring it will make it visible to customers and cashiers again.</span>
+                ) : (
+                  <span>Archiving this product will hide it from customers and cashiers, but you can restore it later.</span>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>
+                Cancel
+              </button>
+              {isArchived ? (
                 <button 
                   type="button" 
                   className="btn btn-success" 
                   onClick={() => {
-                    restockProduct(selectedProduct.id, newStock);
-                    setSelectedProduct(null);
+                    const confirmation = window.confirm('Are you sure you want to restore this product?');
+                    if (confirmation) {
+                      restoreProduct(selectedProduct.id);
+                      setSelectedProduct(null);
+                      alert('Product restored successfully.');
+                    }
                   }}
                 >
-                  Update Stock
+                  <i className="fas fa-undo me-2"></i>Restore Product
                 </button>
-              </div>
+              ) : (
+                <button 
+                  type="button" 
+                  className="btn btn-danger" 
+                  onClick={() => {
+                    const confirmation = window.confirm('Are you sure you want to archive this product?');
+                    if (confirmation) {
+                      archiveProduct(selectedProduct.id);
+                      setSelectedProduct(null);
+                      alert('Product archived successfully.');
+                    }
+                  }}
+                >
+                  <i className="fas fa-archive me-2"></i>Archive Product
+                </button>
+              )}
             </div>
           </div>
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
-    // Handle product group with multiple variants
-    if (selectedProduct.variants) {
-      const totalStockChange = getTotalStockChange();
-      const hasChanges = Object.entries(stockUpdates).some(([variantId, newStock]) => {
-        const currentVariant = inventory.find(p => p.id === Number(variantId));
-        return currentVariant && currentVariant.stock !== newStock;
-      });
+  // Handle product group with multiple variants - simplified to archive/restore all at once
+  if (selectedProduct.variants) {
+    const activeVariants = selectedProduct.variants.filter(v => v.status === 'active');
+    const archivedVariants = selectedProduct.variants.filter(v => v.status === 'inactive');
+    const allArchived = archivedVariants.length === selectedProduct.variants.length;
 
-      return (
-        <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
-          <div className="modal-dialog modal-lg">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Restock Product Variants - {selectedProduct.name}</h5>
-                <button type="button" className="btn-close" onClick={() => setSelectedProduct(null)}></button>
+    return (
+      <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+        <div className="modal-dialog modal-lg">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title">
+                {allArchived ? 'Restore Product' : 'Archive Product'} - {selectedProduct.name}
+              </h5>
+              <button type="button" className="btn-close" onClick={() => setSelectedProduct(null)}></button>
+            </div>
+            <div className="modal-body">
+              <div className="text-center mb-4">
+                <img 
+                  src={selectedProduct.variants[0].image} 
+                  alt={selectedProduct.name}
+                  className="img-thumbnail mb-3"
+                  style={{width: '100px', height: '100px', objectFit: 'cover'}}
+                />
+                <h6>{selectedProduct.name}</h6>
+                <p className="text-muted">
+                  {selectedProduct.variants.length} variant{selectedProduct.variants.length > 1 ? 's' : ''}
+                  {activeVariants.length > 0 && archivedVariants.length > 0 && 
+                    ` (${activeVariants.length} active, ${archivedVariants.length} archived)`
+                  }
+                </p>
               </div>
-              <div className="modal-body">
-                <div className="text-center mb-4">
-                  <img 
-                    src={selectedProduct.variants[0].image} 
-                    alt={selectedProduct.name}
-                    className="img-thumbnail mb-3"
-                    style={{width: '100px', height: '100px', objectFit: 'cover'}}
-                  />
-                  <h6>{selectedProduct.name}</h6>
-                  <p className="text-muted">Select variants to restock</p>
-                </div>
 
-                <div className="table-responsive">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Product ID</th>
-                        <th>Variant</th>
-                        <th>Current Stock</th>
-                        <th>Threshold</th>
-                        <th>New Stock</th>
-                        <th>Change</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedProduct.variants.map(variant => {
-                        const newStock = stockUpdates[variant.id] || variant.stock;
-                        const stockChange = newStock - variant.stock;
-                        const currentStatus = variant.stock === 0 ? 'danger' : 
-                                            variant.stock <= variant.lowStockThreshold ? 'warning' : 'success';
-                        const newStatus = newStock === 0 ? 'danger' : 
-                                        newStock <= variant.lowStockThreshold ? 'warning' : 'success';
+              <div className="table-responsive mb-3">
+                <table className="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Product ID</th>
+                      <th>Variant</th>
+                      <th>Stock</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedProduct.variants.map(variant => {
+                      const isArchived = variant.status === 'inactive';
+                      return (
+                        <tr key={variant.id} className={isArchived ? 'table-secondary' : ''}>
+                          <td><strong>#{variant.id}</strong></td>
+                          <td><strong>{variant.size}</strong></td>
+                          <td>{variant.stock}</td>
+                          <td>
+                            <span className={`badge ${isArchived ? 'bg-secondary' : 'bg-success'}`}>
+                              {isArchived ? 'Archived' : 'Active'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                        return (
-                          <tr key={variant.id} className={stockChange !== 0 ? 'table-warning' : ''}>
-                            <td><strong>#{variant.id}</strong></td>
-                            <td><strong>{variant.size}</strong></td>
-                            <td>{variant.stock}</td>
-                            <td>{variant.lowStockThreshold}</td>
-                            <td>
-                              <input
-                                type="number"
-                                className="form-control form-control-sm"
-                                value={newStock}
-                                onChange={(e) => updateVariantStock(variant.id, e.target.value)}
-                                min="0"
-                                style={{width: '80px'}}
-                              />
-                            </td>
-                            <td>
-                              <span className={`badge ${stockChange > 0 ? 'bg-success' : stockChange < 0 ? 'bg-danger' : 'bg-secondary'}`}>
-                                {stockChange > 0 ? '+' : ''}{stockChange}
-                              </span>
-                            </td>
-                            <td>
-                              <span className={`badge bg-${currentStatus}`}>•</span>
-                              {newStatus !== currentStatus && (
-                                <>
-                                  <i className="fas fa-arrow-right mx-1"></i>
-                                  <span className={`badge bg-${newStatus}`}>•</span>
-                                </>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-
-                {hasChanges && (
-                  <div className={`alert mt-3 ${totalStockChange >= 0 ? 'alert-info' : 'alert-warning'}`}>
-                    <div className="d-flex justify-content-between align-items-center">
-                      <small>
-                        <strong>Total Stock Change:</strong> {totalStockChange >= 0 ? '+' : ''}{totalStockChange} units across all variants
-                      </small>
-                      <button 
-                        className="btn btn-sm btn-outline-secondary" 
-                        onClick={() => {
-                          // Reset all changes
-                          const resetUpdates = {};
-                          selectedProduct.variants.forEach(variant => {
-                            resetUpdates[variant.id] = variant.stock;
-                          });
-                          setStockUpdates(resetUpdates);
-                        }}
-                      >
-                        Reset All
-                      </button>
-                    </div>
-                  </div>
+              <div className={`alert ${allArchived ? 'alert-info' : 'alert-warning'}`}>
+                <i className={`fas ${allArchived ? 'fa-info-circle' : 'fa-exclamation-triangle'} me-2`}></i>
+                {allArchived ? (
+                  <span>All variants are currently archived. Restoring will make them visible to customers and cashiers again.</span>
+                ) : (
+                  <span>This will archive ALL variants of this product. They will be hidden from customers and cashiers but can be restored later.</span>
                 )}
               </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>
-                  Cancel
-                </button>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>
+                Cancel
+              </button>
+              {allArchived ? (
                 <button 
                   type="button" 
                   className="btn btn-success" 
-                  onClick={handleBulkRestock}
-                  disabled={!hasChanges}
+                  onClick={handleRestoreWholeProduct}
                 >
-                  Update Stock ({Object.keys(stockUpdates).length} variants)
+                  <i className="fas fa-undo me-2"></i>Restore All Variants
                 </button>
-              </div>
+              ) : (
+                <button 
+                  type="button" 
+                  className="btn btn-danger" 
+                  onClick={handleArchiveWholeProduct}
+                >
+                  <i className="fas fa-archive me-2"></i>Archive All Variants
+                </button>
+              )}
             </div>
           </div>
         </div>
-      );
-    }
+      </div>
+    );
+  }
 
-    return null;
-  };
+  return null;
+};
 
   return (
     <>
       <AddProductModal />
       <EditProductModal />
-      <RestockModal />
+      <ArchiveModal />
     </>
   );
 }

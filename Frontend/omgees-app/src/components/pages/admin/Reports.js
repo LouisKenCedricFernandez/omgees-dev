@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import axios from 'axios';
 
 function Reports({ transactions = [], inventory = [] }) {
   const [startDate, setStartDate] = useState('');
@@ -7,8 +8,29 @@ function Reports({ transactions = [], inventory = [] }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showExportModal, setShowExportModal] = useState(false);
 
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+
+    // Fetch reports on component mount -nt
+  useEffect(() => {
+  axios
+    .get('http://localhost:5000/reports')
+    .then(response => {
+      setReports(response.data);
+      setLoading(false);
+    })
+    .catch(error => {
+      console.error('Error fetching reports:', error);
+      setLoading(false);
+    });
+}, []);
+
   // Calculate product sales and movement from real transaction data
   const productAnalysis = useMemo(() => {
+    console.log('Analyzing transactions:', transactions.length);
+    console.log('Inventory structure:', inventory.length);
+    
     // Get completed transactions within date range
     const filteredTransactions = transactions.filter(transaction => {
       if (transaction.status !== 'completed') return false;
@@ -20,21 +42,66 @@ function Reports({ transactions = [], inventory = [] }) {
       return (!start || transactionDate >= start) && (!end || transactionDate <= end);
     });
 
-    // Aggregate sales data by product
-    const productSales = {};
+    console.log('Filtered transactions:', filteredTransactions.length);
+
+    // Create a lookup map for inventory variants
+    const variantLookup = {};
+    inventory.forEach(product => {
+      if (product.variants) {
+        product.variants.forEach(variant => {
+          variantLookup[variant.id] = {
+            ...variant,
+            productName: product.name,
+            category: product.category,
+            supplier: product.supplier
+          };
+        });
+      }
+    });
+
+    console.log('Variant lookup created:', Object.keys(variantLookup).length);
+
+    // Aggregate sales data by variant
+    const variantSales = {};
     
     filteredTransactions.forEach(transaction => {
       transaction.items.forEach(item => {
-        const productKey = item.selectedVariant ? 
-          `${item.name}-${item.selectedVariant.size}` : 
-          `${item.displayName || item.name}`;
+        // Handle different item structures
+        let variantId;
+        let itemName;
+        let itemSize;
+        let itemCategory;
         
-        if (!productSales[productKey]) {
-          productSales[productKey] = {
-            name: item.displayName || item.name,
-            baseProductId: item.baseProductId || item.id,
-            size: item.selectedVariant?.size || item.size || 'Standard',
-            category: item.category || 'Unknown',
+        if (item.selectedVariant) {
+          // Customer orders with selected variants
+          variantId = item.selectedVariant.id;
+          itemName = item.name;
+          itemSize = item.selectedVariant.size;
+        } else {
+          // Cashier orders or direct items
+          variantId = item.id;
+          itemName = item.displayName || item.name;
+          itemSize = item.size;
+        }
+        
+        // Look up variant details from inventory
+        const variantDetails = variantLookup[variantId];
+        if (variantDetails) {
+          itemCategory = variantDetails.category;
+          itemName = variantDetails.productName;
+          itemSize = variantDetails.size;
+        } else {
+          itemCategory = item.category || 'Unknown';
+        }
+
+        const productKey = `${variantId}`;
+        
+        if (!variantSales[productKey]) {
+          variantSales[productKey] = {
+            id: variantId,
+            name: itemName,
+            size: itemSize,
+            category: itemCategory,
             qtySold: 0,
             totalRevenue: 0,
             avgPrice: 0,
@@ -42,21 +109,20 @@ function Reports({ transactions = [], inventory = [] }) {
           };
         }
         
-        productSales[productKey].qtySold += item.quantity;
-        productSales[productKey].totalRevenue += item.price * item.quantity;
-        productSales[productKey].transactions += 1;
-        productSales[productKey].avgPrice = productSales[productKey].totalRevenue / productSales[productKey].qtySold;
+        variantSales[productKey].qtySold += item.quantity;
+        variantSales[productKey].totalRevenue += item.price * item.quantity;
+        variantSales[productKey].transactions += 1;
+        variantSales[productKey].avgPrice = variantSales[productKey].totalRevenue / variantSales[productKey].qtySold;
       });
     });
 
-    // Add movement classification and inventory data
-    const productsWithMovement = Object.values(productSales).map(product => {
-      // Find matching inventory item
-      const inventoryItem = inventory.find(item => 
-        item.baseProductId === product.baseProductId || 
-        (item.name === product.name && item.size === product.size)
-      );
+    console.log('Variant sales calculated:', Object.keys(variantSales).length);
 
+    // Add movement classification and current inventory data
+    const productsWithMovement = Object.values(variantSales).map(product => {
+      // Find current inventory status
+      const currentVariant = variantLookup[product.id];
+      
       // Classify movement based on quantity sold
       let movement = 'Non-moving';
       let movementColor = 'danger';
@@ -76,20 +142,17 @@ function Reports({ transactions = [], inventory = [] }) {
         ...product,
         movement,
         movementColor,
-        currentStock: inventoryItem?.stock || 0,
-        stockStatus: inventoryItem?.status || 'inactive',
-        lowStockThreshold: inventoryItem?.lowStockThreshold || 0,
-        type: inventoryItem?.category === 'ingredients' ? 'Perishable' : 'Non-Perishable'
+        currentStock: currentVariant?.stock || 0,
+        stockStatus: currentVariant?.status || 'inactive',
+        lowStockThreshold: currentVariant?.lowStockThreshold || 0,
+        supplier: currentVariant?.supplier || 'Unknown',
+        type: product.category === 'ingredients' ? 'Perishable' : 'Non-Perishable'
       };
     });
 
+    console.log('Final analysis:', productsWithMovement.length);
     return productsWithMovement;
   }, [transactions, inventory, startDate, endDate]);
-
-  // Get unique categories for filter
-  const categories = useMemo(() => {
-    return [...new Set(productAnalysis.map(p => p.category))];
-  }, [productAnalysis]);
 
   // Filter products based on filters
   const filteredProducts = useMemo(() => {
@@ -137,17 +200,16 @@ function Reports({ transactions = [], inventory = [] }) {
   };
 
   const exportData = (format) => {
-    // Mock export functionality - you can implement actual export logic here
     const exportData = filteredProducts.map(product => ({
       'Product Name': product.name,
+      'Variant': product.size,
       'Category': product.category,
-      'Size': product.size,
       'Qty Sold': product.qtySold,
       'Total Revenue': product.totalRevenue,
-      'Average Price': product.avgPrice,
+      'Average Price': product.avgPrice.toFixed(2),
       'Movement Type': product.movement,
       'Current Stock': product.currentStock,
-      'Stock Status': product.stockStatus
+      'Supplier': product.supplier
     }));
 
     console.log(`Exporting ${exportData.length} products as ${format}`, exportData);
@@ -177,22 +239,7 @@ function Reports({ transactions = [], inventory = [] }) {
           min={startDate || undefined}
         />
       </div>
-      <div className="col-md-2">
-        <label className="form-label fw-semibold">Category</label>
-        <select 
-          className="form-select"
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-        >
-          <option value="all">All Categories</option>
-          {categories.map(category => (
-            <option key={category} value={category}>
-              {category.charAt(0).toUpperCase() + category.slice(1)}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="col-md-3">
+      <div className="col-md-4">
         <label className="form-label fw-semibold">Product Movement</label>
         <select 
           className="form-select"
@@ -206,7 +253,7 @@ function Reports({ transactions = [], inventory = [] }) {
           <option value="Non-moving">Non-Moving (0-4 sold)</option>
         </select>
       </div>
-      <div className="col-md-3">
+      <div className="col-md-4">
         <div className="d-flex gap-2">
           <button className="btn btn-outline-danger" onClick={resetFilters}>
             <i className="bi bi-arrow-clockwise"></i> Reset
@@ -223,111 +270,28 @@ function Reports({ transactions = [], inventory = [] }) {
     </div>
   );
 
-  const renderSummaryCards = () => (
-    <div className="row g-3 mb-4">
-      <div className="col-md-3">
-        <div className="card border-0 bg-primary text-white">
-          <div className="card-body text-center">
-            <h4 className="mb-1">{summaryStats.totalProducts}</h4>
-            <small>Total Products</small>
-          </div>
-        </div>
-      </div>
-      <div className="col-md-3">
-        <div className="card border-0 bg-success text-white">
-          <div className="card-body text-center">
-            <h4 className="mb-1">{summaryStats.totalQty.toLocaleString()}</h4>
-            <small>Units Sold</small>
-          </div>
-        </div>
-      </div>
-      <div className="col-md-3">
-        <div className="card border-0 bg-warning text-white">
-          <div className="card-body text-center">
-            <h4 className="mb-1">{formatCurrency(summaryStats.totalRevenue)}</h4>
-            <small>Total Revenue</small>
-          </div>
-        </div>
-      </div>
-      <div className="col-md-3">
-        <div className="card border-0 bg-info text-white">
-          <div className="card-body text-center">
-            <h4 className="mb-1">{formatCurrency(summaryStats.avgRevenuePerProduct)}</h4>
-            <small>Avg Revenue/Product</small>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderMovementSummary = () => (
-    <div className="card border-0 shadow-sm mb-4">
-      <div className="card-header bg-light">
-        <h6 className="mb-0">Product Movement Summary</h6>
-      </div>
-      <div className="card-body">
-        <div className="row text-center">
-          <div className="col-3">
-            <div className="text-success fw-bold fs-4">{summaryStats.movementBreakdown['Fast-moving']}</div>
-            <small className="text-muted">Fast-Moving</small>
-          </div>
-          <div className="col-3">
-            <div className="text-info fw-bold fs-4">{summaryStats.movementBreakdown['Medium-moving']}</div>
-            <small className="text-muted">Medium-Moving</small>
-          </div>
-          <div className="col-3">
-            <div className="text-warning fw-bold fs-4">{summaryStats.movementBreakdown['Slow-moving']}</div>
-            <small className="text-muted">Slow-Moving</small>
-          </div>
-          <div className="col-3">
-            <div className="text-danger fw-bold fs-4">{summaryStats.movementBreakdown['Non-moving']}</div>
-            <small className="text-muted">Non-Moving</small>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
   const renderTableHeader = () => (
     <thead className="table-dark sticky-top">
       <tr>
         <th scope="col">Product Name</th>
-        <th scope="col" className="text-center">Category</th>
-        <th scope="col" className="text-center">Size</th>
         <th scope="col" className="text-center">Qty Sold</th>
-        <th scope="col" className="text-center">Current Stock</th>
         <th scope="col" className="text-center">Movement</th>
-        <th scope="col" className="text-center">Avg Price</th>
+        <th scope="col" className="text-center">Total Amount</th>
         <th scope="col" className="text-end">Total Revenue</th>
       </tr>
     </thead>
   );
 
   const renderTableRow = (product) => (
-    <tr key={`${product.baseProductId}-${product.size}`}>
+    <tr key={`${product.id}`}>
       <td>
         <div>
           <div className="fw-semibold">{product.name}</div>
-          <small className="text-muted">ID: {product.baseProductId}</small>
+          <small className="text-muted">ID: {product.id}</small>
         </div>
       </td>
       <td className="text-center">
-        <span className={`badge ${product.category === 'ingredients' ? 'bg-success' : 
-                                 product.category === 'tools' ? 'bg-primary' : 'bg-warning'}`}>
-          {product.category}
-        </span>
-      </td>
-      <td className="text-center">
-        <strong>{product.size}</strong>
-      </td>
-      <td className="text-center">
         <strong>{product.qtySold}</strong>
-      </td>
-      <td className="text-center">
-        <span className={`badge ${product.currentStock === 0 ? 'bg-danger' : 
-                                  product.currentStock <= product.lowStockThreshold ? 'bg-warning text-dark' : 'bg-success'}`}>
-          {product.currentStock}
-        </span>
       </td>
       <td className="text-center">
         <span className={`badge bg-${product.movementColor} ${product.movementColor === 'warning' ? 'text-dark' : ''}`}>
@@ -345,10 +309,13 @@ function Reports({ transactions = [], inventory = [] }) {
 
   const renderEmptyState = () => (
     <tr>
-      <td colSpan="8" className="text-center py-5 text-muted">
+      <td colSpan="5" className="text-center py-5 text-muted">
         <i className="bi bi-inbox fs-1 d-block mb-3"></i>
         <h5>No sales data found</h5>
-        <p>Try adjusting your filters or date range, or ensure there are completed transactions</p>
+        <p>Try adjusting your filters, date range, or complete some transactions first</p>
+        <small className="text-info">
+          Transactions: {transactions.length} | Products: {inventory.length}
+        </small>
       </td>
     </tr>
   );
@@ -356,15 +323,14 @@ function Reports({ transactions = [], inventory = [] }) {
   const renderTableFooter = () => (
     <tfoot className="table-light">
       <tr className="fw-bold">
-        <td colSpan="3">Total</td>
-        <td className="text-center">{summaryStats.totalQty.toLocaleString()}</td>
+        <td>Total</td>
         <td colSpan="3"></td>
         <td className="text-end">{formatCurrency(summaryStats.totalRevenue)}</td>
       </tr>
     </tfoot>
   );
 
-  // Export Modal
+  // Export Modal (same as before)
   const ExportModal = () => (
     showExportModal && (
       <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
@@ -404,20 +370,12 @@ function Reports({ transactions = [], inventory = [] }) {
       <div className="container py-5">
         <div className="row">
           <div className="col-12">
-            
-            {/* Summary Cards */}
-            {renderSummaryCards()}
-            
-            {/* Movement Summary */}
-            {renderMovementSummary()}
-            
             <div className="card border-0 shadow-sm">
-              
               {/* Report Header */}
               <div className="card-header bg-white border-0 pb-4">
                 <div className="d-flex justify-content-between align-items-center mb-3">
                   <h2 className="mb-0">Sales & Product Movement Report</h2>
-                  <span className="badge bg-primary">{filteredProducts.length} products</span>
+                  <span className="badge bg-primary">{filteredProducts.length} variants</span>
                 </div>
                 {renderFilters()}
               </div>

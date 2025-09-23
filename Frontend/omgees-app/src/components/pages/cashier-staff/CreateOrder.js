@@ -3,8 +3,13 @@ import axios from 'axios';
 
 function CreateOrder({ user, onOrderComplete }) {
   const [inventory, setInventory] = useState([]);
-  const [customerInfo, setCustomerInfo] = useState({ name: '', phone: '', email: '' });
+   const [cartItems, setCartItems] = useState([]);
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [orderNotes, setOrderNotes] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [amountReceived, setAmountReceived] = useState(0);
 
+  // Fetch inventory on component mount
   useEffect(() => {
     axios.get('http://localhost:5000/inventory')
       .then(res => {
@@ -29,27 +34,46 @@ function CreateOrder({ user, onOrderComplete }) {
         console.error('Failed to load inventory:', err);
       });
   }, []);
-  
-  const [cartItems, setCartItems] = useState([]);
-  const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [orderNotes, setOrderNotes] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('all');
+
+  const handlePayment = async (orderData) => {
+  try {
+    const response = await fetch('http://localhost:5000/add-order', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(orderData),
+    });
+    const result = await response.json();
+    if (result.success) {
+      // Payment/order recorded successfully
+      // You can show a success message or redirect here
+    } else {
+      // Handle error
+    }
+  } catch (error) {
+    // Handle network or server error
+  }
+};
+ 
 
   // Convert inventory to usable products for cashier
   const availableProducts = useMemo(() => {
   return inventory
-    .filter(item => item.status === 'In Stock' && item.stock > 0)
+    .filter(item => 
+      (item.status === 'In Stock' || item.status === 'active') && item.stock > 0
+    )
     .map(item => ({
-  id: item.id,
-  baseProductId: item.baseProductId,
-  name: item.name,
-  displayName: `${item.name} (${item.size})`,
-  price: item.price ?? item.product_price ?? 0,
-  stock: item.stock ?? item.product_totalstock ?? 0,
-  size: item.size,
-  category: item.category,
-  image: item.image
-}));
+      id: item.id,
+      baseProductId: item.baseProductId,
+      name: item.name,
+      displayName: `${item.name} (${item.size})`,
+      price: item.price,
+      stock: item.stock,
+      size: item.size,
+      category: item.category,
+      image: item.image
+    }));
 }, [inventory]);
 
   // Filter products by category
@@ -80,6 +104,11 @@ function CreateOrder({ user, onOrderComplete }) {
       setCartItems([...cartItems, { ...product, quantity: 1 }]);
     }
   };
+
+  const getChange = () => {
+  return amountReceived - getTotal();
+  };
+
 
   const updateQuantity = (productId, change) => {
     const product = availableProducts.find(p => p.id === productId);
@@ -113,8 +142,9 @@ function CreateOrder({ user, onOrderComplete }) {
       return;
     }
 
-    if (!customerInfo.name) {
-      alert('Please enter customer name');
+    // For cash payments, validate sufficient amount
+    if (paymentMethod === 'cash' && getChange() < 0) {
+      alert('Insufficient amount received from customer');
       return;
     }
 
@@ -124,16 +154,54 @@ function CreateOrder({ user, onOrderComplete }) {
       createdBy: user?.email || 'cashier@store.com',
       cashierName: user?.name || 'Store Cashier',
       timestamp: new Date().toISOString(),
-      customer: customerInfo,
+      customer: {
+        name: 'Walk-in Customer', // Keep this generic
+        phone: '',
+        email: ''
+      },
       items: cartItems,
       payment: {
         method: paymentMethod,
-        status: 'completed'
+        status: 'completed',
+        amountReceived: paymentMethod === 'cash' ? amountReceived : getTotal(),
+        change: paymentMethod === 'cash' ? getChange() : 0
       },
       total: getTotal(),
       status: 'completed',
       notes: orderNotes
     };
+
+    axios.post('http://localhost:5000/add-order', newOrder)
+  .then(response => {
+    if (response.data.success) {
+      // For each item in the order, update stock and sold
+      cartItems.forEach(item => {
+  axios.post('http://localhost:5000/update-stock', {
+    product_id: item.id,
+    updated_data: {
+      product_name: item.name,
+      product_category: item.category,
+      product_variant: item.size,
+      product_totalstock: item.stock - item.quantity,
+      product_price: item.price,
+      product_description: item.description || "",
+      product_supplier: item.supplier || "",
+      product_totalsold: (item.sold || 0) + item.quantity
+    }
+  });
+});
+      // Optionally show a success message or do something else
+      console.log('Order/payment recorded in database');
+    } else {
+      // Optionally show an error message
+      console.error('Order/payment failed to record in database');
+    }
+  })
+  .catch(error => {
+    // Handle network/server error
+    console.error('Network/server error:', error);
+  });
+    
 
     // Pass the order to parent component
     if (onOrderComplete) {
@@ -141,14 +209,17 @@ function CreateOrder({ user, onOrderComplete }) {
     }
 
     console.log('In-Store Order Created:', newOrder);
-    alert('Order completed successfully!');
+    alert(`Order completed successfully! ${paymentMethod === 'cash' ? `Change: ₱${getChange().toLocaleString()}` : ''}`);
     
-    // Reset
-    setCustomerInfo({ name: '', phone: '', email: '' });
+    // Handle payment recording
+    handlePayment(user?.id, getTotal());
+
+    // Reset form
     setCartItems([]);
     setPaymentMethod('cash');
+    setAmountReceived(0);
     setOrderNotes('');
-  };
+};
 
   // Show if no products available
   if (availableProducts.length === 0) {
@@ -254,52 +325,17 @@ function CreateOrder({ user, onOrderComplete }) {
                   </div>
                 </div>
               </div>
-
               {/* Customer Information & Order Details */}
               <div className="col-lg-4 col-md-5 mb-3">
                 <div className="card h-100 border-0 shadow-sm">
-                  <div className="card-header bg-success text-white py-2">
+                  <div className="card-header bg-primary text-white py-2">
                     <h5 className="mb-0">
-                      <i className="fas fa-user me-2"></i>Customer Information
+                      <i className="fas fa-user me-2"></i>Product Transaction
                     </h5>
                   </div>
                   <div className="card-body p-3">
-                    <div className="mb-3">
-                      <label className="form-label">Customer Name *</label>
-                      <input 
-                        type="text" 
-                        className="form-control form-control-sm" 
-                        value={customerInfo.name}
-                        onChange={(e) => setCustomerInfo({...customerInfo, name: e.target.value})}
-                        placeholder="Enter customer name"
-                        required
-                      />
-                    </div>
-                    <div className="mb-3">
-                      <label className="form-label">Phone Number</label>
-                      <input 
-                        type="tel" 
-                        className="form-control form-control-sm" 
-                        value={customerInfo.phone}
-                        onChange={(e) => setCustomerInfo({...customerInfo, phone: e.target.value})}
-                        placeholder="Optional"
-                      />
-                    </div>
-                    <div className="mb-3">
-                      <label className="form-label">Email</label>
-                      <input 
-                        type="email" 
-                        className="form-control form-control-sm" 
-                        value={customerInfo.email}
-                        onChange={(e) => setCustomerInfo({...customerInfo, email: e.target.value})}
-                        placeholder="Optional"
-                      />
-                    </div>
-
-                    <hr />
-
                     <h6 className="mb-3">
-                      <i className="fas fa-shopping-cart me-2"></i>Cart Items
+                      <i className="fas fa-shopping-cart me-2"></i>Items
                       <span className="badge bg-primary ms-2">{cartItems.length}</span>
                     </h6>
 
@@ -307,7 +343,7 @@ function CreateOrder({ user, onOrderComplete }) {
                       {cartItems.length === 0 ? (
                         <div className="text-center py-3">
                           <i className="fas fa-shopping-cart display-6 text-muted mb-2"></i>
-                          <p className="text-muted small">No items in cart</p>
+                          <p className="text-muted small">No items in list</p>
                         </div>
                       ) : (
                         cartItems.map(item => (
@@ -361,32 +397,50 @@ function CreateOrder({ user, onOrderComplete }) {
                         onChange={(e) => setPaymentMethod(e.target.value)}
                       >
                         <option value="cash">Cash</option>
-                        <option value="card">Credit/Debit Card</option>
                         <option value="gcash">GCash</option>
+                        <option value="card">Bank Transfer</option>
                       </select>
                     </div>
-
-                    <div className="mb-3">
-                      <label className="form-label">Order Notes</label>
-                      <input 
-                        type="text" 
-                        className="form-control form-control-sm" 
-                        value={orderNotes}
-                        onChange={(e) => setOrderNotes(e.target.value)}
-                        placeholder="Optional notes"
-                      />
-                    </div>
-
+                    {/* Payment Calculation Section */}
                     <div className="border-top pt-3">
-                      <div className="d-flex justify-content-between align-items-center mb-3">
-                        <h5 className="mb-0">Total:</h5>
-                        <h4 className="mb-0 text-primary">₱{getTotal().toLocaleString()}</h4>
+                      <div className="mb-3">
+                        <div className="d-flex justify-content-between align-items-center mb-2">
+                          <span className="small fw-semibold">Total Amount:</span>
+                          <span className="small fw-bold text-primary">₱{getTotal().toLocaleString()}</span>
+                        </div>
+                        
+                        {paymentMethod === 'cash' && (
+                          <>
+                            <div className="d-flex justify-content-between align-items-center mb-2">
+                              <label className="small fw-semibold mb-0">Amount Received:</label>
+                              <input 
+                                type="number" 
+                                className="form-control form-control-sm"
+                                placeholder="0.00"
+                                value={amountReceived}
+                                onChange={(e) => setAmountReceived(Number(e.target.value) || 0)}
+                                min="0"
+                                step="0.01"
+                                style={{ width: '120px' }}
+                              />
+                              <span className="small fw-semibold">Change:</span>
+                              <span className={`small fw-bold ${getChange() < 0 ? 'text-danger' : 'text-primary'}`}>
+                                ₱{getChange().toLocaleString()}
+                              </span>
+                            </div>
+                            {getChange() < 0 && (
+                              <small className="text-danger">
+                                <i className="fas fa-exclamation-triangle me-1"></i>
+                                Insufficient amount received
+                              </small>
+                            )}
+                          </>
+                        )}
                       </div>
-                      
                       <button 
-                        className="btn btn-success w-100"
+                        className="btn btn-primary w-100"
                         onClick={handleSubmit}
-                        disabled={cartItems.length === 0 || !customerInfo.name}
+                        disabled={cartItems.length === 0 || (paymentMethod === 'cash' && getChange() < 0)}
                       >
                         <i className="fas fa-check me-2"></i>Complete Order
                       </button>

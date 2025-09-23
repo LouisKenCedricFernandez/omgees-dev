@@ -1,15 +1,54 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 
 function ManageOrder({ user, orders = [], onUpdateOrder }) {
   // Filter states
+  const [dborders, setDborders] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   
+  // helper: always return an array for items (defensive parsing)
+const ensureItemsArray = (items) => {
+  if (!items) return [];
+  if (Array.isArray(items)) return items;
+  if (typeof items === 'string') {
+    try {
+      const parsed = JSON.parse(items);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === 'object') return [parsed];
+      return [];
+    } catch (e) {
+      // fallback: comma-separated list or plain string
+      try {
+        return items.split(',').map(s => s.trim()).filter(Boolean);
+      } catch (_) {
+        return [];
+      }
+    }
+  }
+  if (typeof items === 'object') return [items];
+  return [];
+};
+
+
+  useEffect(() => {
+  axios.get('http://localhost:5000/manage-orders')
+    .then(res => {
+      const orders = res.data.map(order => ({
+        ...order,
+        items: ensureItemsArray(order.items)
+      }));
+      setDborders(orders);
+    })
+    .catch(err => console.error(err));
+}, []);
+
+
   const updateOrderStatus = (orderId, newStatus) => {
-    const updatedOrders = orders.map(order => 
+    const updatedOrders = dborders.map(order => 
       order.orderId === orderId 
         ? { ...order, status: newStatus }
         : order
@@ -20,16 +59,15 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
   };
 
   // Filter logic
-  const filteredOrders = orders.filter(order => {
-    const orderDate = new Date(order.timestamp);
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
-    const dateInRange = (!start || orderDate >= start) && (!end || orderDate <= end);
-    const statusMatch = statusFilter === 'all' || order.status.toLowerCase() === statusFilter.toLowerCase();
-    const typeMatch = typeFilter === 'all' || order.orderType === typeFilter;
-    
-    return dateInRange && statusMatch && typeMatch;
-  });
+  const filteredOrders = dborders.filter(order => {
+  const orderDate = new Date(order.timestamp);
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+  const dateInRange = (!start || orderDate >= start) && (!end || orderDate <= end);
+  const statusMatch = statusFilter === 'all' || order.status.toLowerCase() === statusFilter.toLowerCase();
+  const typeMatch = typeFilter === 'all' || order.orderType === typeFilter;
+  return dateInRange && statusMatch && typeMatch;
+});
 
   // Helper functions
   const resetFilters = () => {
@@ -162,6 +200,8 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
   const OrderDetailsModal = () => {
     if (!selectedOrder) return null;
 
+    const items = ensureItemsArray(selectedOrder.items);
+
     return (
       <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
         <div className="modal-dialog modal-lg">
@@ -254,12 +294,13 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedOrder.items.map((item, index) => (
-                          <tr key={item.id || index}>
+                        {/* made some changes here */}
+                        {items.map((item, index) => (
+                            <tr key={item.id || index}>
                             <td>{item.displayName || item.name}</td>
-                            <td>₱{item.price.toLocaleString()}</td>
-                            <td>{item.quantity}</td>
-                            <td>₱{(item.price * item.quantity).toLocaleString()}</td>
+                            <td>₱{Number(item.price || 0).toLocaleString()}</td>
+                            <td>{Number(item.quantity || 0)}</td>
+                            <td>₱{(Number(item.price || 0) * Number(item.quantity || 0)).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -295,15 +336,23 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
               )}
 
               <div className="row mb-3">
-                <div className="col-12">
-                  <h6>Payment Information</h6>
-                  <p><strong>Method:</strong> {selectedOrder.payment.method.toUpperCase()}</p>
-                  <p><strong>Status:</strong> {getStatusBadge(selectedOrder.payment.status)}</p>
-                  {selectedOrder.paymentProof && (
-                    <p><strong>Payment Proof:</strong> {selectedOrder.paymentProof}</p>
-                  )}
-                </div>
+               <div className="col-12">
+              <h6>Payment Information</h6>
+             <p>
+              <strong>Method:</strong>{" "}
+              {(selectedOrder.payment?.method || '').toUpperCase()}
+             </p>
+                <p>
+                  <strong>Status:</strong>{" "}
+                  {getStatusBadge(selectedOrder.payment?.status || '')}
+                 </p>
+                   {selectedOrder.paymentProof && (
+                  <p>
+                  <strong>Payment Proof:</strong> {selectedOrder.paymentProof}
+                </p>
+                )}
               </div>
+            </div>
 
               {selectedOrder.notes && (
                 <div className="row">
@@ -409,7 +458,7 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
                             <td className="text-center">
                               <button 
                                 className="btn btn-sm btn-outline-primary"
-                                onClick={() => setSelectedOrder(order)}
+                                onClick={() => setSelectedOrder({ ...order, items: ensureItemsArray(order.items) })}
                               >
                                 <i className="fas fa-eye"></i> View
                               </button>

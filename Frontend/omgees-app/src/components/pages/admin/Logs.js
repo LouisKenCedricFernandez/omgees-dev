@@ -1,9 +1,10 @@
-
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 
 function Logs({ transactions = [], activities = [] }) {
   // Filter states
+  const [dbOrders, setDbOrders] = useState([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [activityTypeFilter, setActivityTypeFilter] = useState('all');
@@ -23,6 +24,17 @@ function Logs({ transactions = [], activities = [] }) {
       })
     }));
   }, [activities]);
+
+   // Fetch orders from backend on component mount -nt
+  useEffect(() => {
+  axios.get('http://localhost:5000/manage-orders')
+    .then(res => {
+      setDbOrders(res.data);
+    })
+    .catch(err => {
+      console.error('Failed to fetch orders:', err);
+    });
+}, []);
 
   // Get unique activity types and user types for filters
   const activityTypes = useMemo(() => {
@@ -48,23 +60,28 @@ function Logs({ transactions = [], activities = [] }) {
     });
   }, [processedActivities, startDate, endDate, activityTypeFilter, userTypeFilter]);
 
-  // Filter transactions
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter(transaction => {
-        
-        const isActualTransaction = transaction.orderId && transaction.total && transaction.customer;
-        
-        const transactionDate = new Date(transaction.timestamp);
-        const start = startDate ? new Date(startDate) : null;
-        const end = endDate ? new Date(endDate) : null;
-        
-        const dateInRange = (!start || transactionDate >= start) && (!end || transactionDate <= end);
-        
-        return isActualTransaction && dateInRange;
-    });
-  }, [transactions, startDate, endDate]);
+// ...existing code...
 
-  // Helper functions
+// Filter transactions -nt
+const filteredTransactions = useMemo(() => {
+  return dbOrders.filter(transaction => {
+    const isActualTransaction =
+      transaction.order_id && // <-- match DB field
+      transaction.customer &&
+      (transaction.total !== undefined && transaction.total !== null) &&
+      (transaction.type === 'online' || transaction.type === 'in-store'); // <-- match DB field
+
+    const transactionDate = new Date(transaction.date); // <-- match DB field
+    const start = startDate ? new Date(startDate) : null;
+    const end = endDate ? new Date(endDate) : null;
+
+    const dateInRange = (!start || transactionDate >= start) && (!end || transactionDate <= end);
+
+    return isActualTransaction && dateInRange;
+  });
+}, [dbOrders, startDate, endDate]);
+
+
   const resetFilters = () => {
     setStartDate('');
     setEndDate('');
@@ -77,10 +94,6 @@ function Logs({ transactions = [], activities = [] }) {
       style: 'currency',
       currency: 'PHP'
     }).format(amount);
-  };
-
-  const getActivityTypeCount = (type) => {
-    return filteredActivities.filter(a => a.type === type).length;
   };
 
   const getStatusColor = (status) => {
@@ -296,50 +309,6 @@ function Logs({ transactions = [], activities = [] }) {
     </div>
   );
 
-  const renderSummaryFooter = () => (
-    <div className="card-footer bg-light border-0">
-      {activeTab === 'activities' ? (
-        <div className="row text-center">
-          <div className="col-md-3">
-            <div className="fw-semibold text-success">{getActivityTypeCount('order_completed')}</div>
-            <small className="text-muted">Orders Completed</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-info">{getActivityTypeCount('stock_updated')}</div>
-            <small className="text-muted">Stock Updates</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-warning">{getActivityTypeCount('inventory_updated')}</div>
-            <small className="text-muted">Inventory Changes</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-primary">{filteredActivities.length}</div>
-            <small className="text-muted">Total Activities</small>
-          </div>
-        </div>
-      ) : (
-        <div className="row text-center">
-          <div className="col-md-3">
-            <div className="fw-semibold text-success">{filteredTransactions.filter(t => t.status === 'completed').length}</div>
-            <small className="text-muted">Completed</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-warning">{filteredTransactions.filter(t => t.status === 'pending').length}</div>
-            <small className="text-muted">Pending</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-primary">{formatCurrency(filteredTransactions.filter(t => t.status === 'completed').reduce((sum, t) => sum + t.total, 0))}</div>
-            <small className="text-muted">Total Revenue</small>
-          </div>
-          <div className="col-md-3">
-            <div className="fw-semibold text-dark">{filteredTransactions.length}</div>
-            <small className="text-muted">Total Transactions</small>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div className="container-fluid bg-light min-vh-100">
       <div className="container py-5">
@@ -375,7 +344,7 @@ function Logs({ transactions = [], activities = [] }) {
                       onClick={() => setActiveTab('transactions')}
                     >
                       <i className="bi bi-receipt me-2"></i>
-                      Transaction History ({transactions.length})
+                      Transaction History ({dbOrders.length})
                     </button>
                   </li>
                 </ul>
@@ -387,13 +356,6 @@ function Logs({ transactions = [], activities = [] }) {
               <div className="card-body p-0 mt-3">
                 {activeTab === 'activities' ? renderActivitiesTable() : renderTransactionsTable()}
               </div>
-              
-              {/* Summary Footer */}
-              {((activeTab === 'activities' && filteredActivities.length > 0) || 
-                (activeTab === 'transactions' && filteredTransactions.length > 0)) && 
-                renderSummaryFooter()
-              }
-              
             </div>
           </div>
         </div>

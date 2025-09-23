@@ -3,20 +3,56 @@ import { useAuth } from './Authentication';
 import { Link } from 'react-router-dom';
 import omgeesLogo from './components/images/omgeesLogo.png';
 
+// Import useNavigate for navigation after login -nt
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+
+
 function UserLogin() {
-  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(''); 
 
-  const handleLogin = (e) => {
+  //to navigate after login -
+  const { setBackendUser } = useAuth();
+  const navigate = useNavigate();
+
+
+  // Handle form submission for login -nt
+ const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
-    
-    const result = login(email, password);
-    
-    if (!result.success) {
-      setError(result.error);
+
+    try {
+      const res = await axios.post('http://localhost:5000/login', {
+        email: email,
+        password: password
+      });
+      const data = res.data;
+      if (data.status === "Success") {
+        // Set backend user in context
+        setBackendUser({
+          email: data.user.email,
+          name: data.user.name,
+          type: data.user_type, // or data.user.user_type if that's what your backend returns
+          // add other fields as needed
+        });
+
+        // Now navigation will work
+        if (data.user_type === "admin") {
+          navigate('/admin/dashboard');
+        } else if (data.user_type === "cashier") {
+          navigate('/cashier/create-orders');
+        } else if (data.user_type === "inventory_manager") {
+          navigate('/inventory/manage');
+        } else {
+          navigate('/');
+        }
+      } else {
+        setError('Invalid email or password.');
+      }
+    } catch (err) {
+      setError('Server error. Please try again later.');
     }
   };
 

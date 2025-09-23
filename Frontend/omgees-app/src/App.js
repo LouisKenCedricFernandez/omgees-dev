@@ -12,7 +12,7 @@ import Reports from './components/pages/admin/Reports';
 import Maintenance from './components/pages/admin/Maintenance';
 import Navbar from './components/inc/Navbar';
 import Home from './components/pages/Home';
-import About from './components/pages/About';
+import Profile from './components/pages/Profile';
 import Contact from './components/pages/Contact';
 import Checkout from './components/pages/Checkout';
 import Ingredients from './components/pages/products/Ingredients';
@@ -226,8 +226,15 @@ const logActivity = (activity) => {
     });
     
     setOrders(updatedOrders);
+    
+    // FIXED: Also update allTransactions to reflect the status changes
+    setAllTransactions(prevTransactions => 
+      prevTransactions.map(transaction => {
+        const updatedOrder = updatedOrders.find(order => order.orderId === transaction.orderId);
+        return updatedOrder ? updatedOrder : transaction;
+      })
+    );
   };
-
   if (!isAuthenticated) {
     return (
       <div className="login">
@@ -263,7 +270,7 @@ const logActivity = (activity) => {
                 path="/admin/logs" 
                 element={
                   <Logs 
-                    transactions={allTransactions || []}
+                    transactions={orders}
                     activities={activities || []}
                   />
                 } 
@@ -324,6 +331,7 @@ const logActivity = (activity) => {
                     user={currentUser}
                     onInventoryUpdate={handleInventoryUpdate}
                     initialInventory={currentInventory}
+                    onInitialLoad={setCurrentInventory} // Add this new prop
                   />
                 } 
               />
@@ -336,7 +344,7 @@ const logActivity = (activity) => {
           <Navbar user={currentUser} onLogout={logout} cartItems={cartItems} onUpdateCart={handleUpdateCart} />
           <Routes>
             <Route path="/" element={<Home user={currentUser} onLogout={logout} />} />
-            <Route path="/about" element={<About />} />
+            <Route path="/profile" element={<Profile user={currentUser} orders={orders} onOrderUpdate={handleOrderStatusUpdate} />} />
             <Route 
               path="/checkout" 
               element={

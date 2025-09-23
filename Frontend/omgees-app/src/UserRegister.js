@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
-import { useAuth } from './Authentication';
 import { Link } from 'react-router-dom';
 import omgeesLogo from './components/images/omgeesLogo.png';
 
 function UserRegister() {
-  const { register } = useAuth();
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -60,18 +58,29 @@ function UserRegister() {
     return true;
   };
 
-  const handleRegister = (e) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    
-    if (!validateForm()) {
-      return;
-    }
+   // Handle form submission for registration -nt
+  const handleRegister = async (e) => {
+  e.preventDefault();
+  setError('');
+  setSuccess('');
 
-    const result = register(formData);
-    
-    if (result.success) {
+  if (!validateForm()) {
+    return;
+  }
+
+  // Remove confirmPassword before sending
+  const { confirmPassword, ...submitData } = formData;
+
+  try {
+    const response = await fetch('http://localhost:5000/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submitData)
+    });
+    const data = await response.json();
+    if (data === "Error") {
+      setError('Registration failed. Please try again.');
+    } else {
       setSuccess('Account created successfully! You can now sign in.');
       setFormData({
         name: '',
@@ -79,13 +88,15 @@ function UserRegister() {
         phone: '',
         address: '',
         password: '',
-        confirmPassword: ''
+        confirmPassword: '',
+        user_type: 'customer',
+        status: 'active'
       });
-    } else {
-      setError(result.error);
     }
-  };
-
+  } catch (err) {
+    setError('Server error. Please try again later.');
+  }
+};
   return (
     <div className="container-fluid vh-100 d-flex align-items-center justify-content-center custom-bg-login">
       <div className="row justify-content-center w-100">

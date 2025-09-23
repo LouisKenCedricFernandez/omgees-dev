@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
@@ -34,9 +34,61 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
     bankName: '',
     accountName: ''
   });
-    const [orderNotes, setOrderNotes] = useState('');
-    const [paymentProof, setPaymentProof] = useState(null);
-    const activeCartItems = cartItems;
+  const [orderNotes, setOrderNotes] = useState('');
+  const [paymentProof, setPaymentProof] = useState(null);
+  const [paymentProofPreview, setPaymentProofPreview] = useState(null);
+  const [stockWarnings, setStockWarnings] = useState([]);
+  const activeCartItems = cartItems;
+
+  // Stock validation function wrapped in useCallback
+  const validateStock = useCallback(() => {
+    const warnings = [];
+    activeCartItems.forEach(item => {
+      const availableStock = item.selectedVariant ? item.selectedVariant.count : item.count;
+      if (item.quantity > availableStock) {
+        warnings.push({
+          itemName: item.displayName || item.name,
+          requested: item.quantity,
+          available: availableStock,
+          itemId: item.id,
+          variantId: item.selectedVariant?.id
+        });
+      }
+    });
+    setStockWarnings(warnings);
+    return warnings.length === 0;
+  }, [activeCartItems]);
+
+  // Run stock validation whenever cart items change
+  useEffect(() => {
+    if (activeCartItems.length > 0) {
+      validateStock();
+    } else {
+      setStockWarnings([]);
+    }
+  }, [activeCartItems, validateStock]);
+
+  // Auto-fix stock quantities for items that exceed available stock
+  const fixStockQuantities = () => {
+    if (stockWarnings.length > 0 && onUpdateCart) {
+      const fixedItems = activeCartItems.map(item => {
+        const warning = stockWarnings.find(w => 
+          w.itemId === item.id && 
+          (w.variantId ? w.variantId === item.selectedVariant?.id : !item.selectedVariant)
+        );
+        
+        if (warning && warning.available > 0) {
+          return { ...item, quantity: warning.available };
+        } else if (warning && warning.available === 0) {
+          return null; // Remove items with 0 stock
+        }
+        return item;
+      }).filter(Boolean);
+      
+      onUpdateCart(fixedItems);
+      alert('Cart quantities have been adjusted to available stock levels.');
+    }
+  };
 
     if (cartItems.length === 0) {
     return (
@@ -111,13 +163,24 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
     const file = e.target.files[0];
     if (file) {
       setPaymentProof(file);
+      
+      // Create preview URL for image
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setPaymentProofPreview(reader.result);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        setPaymentProofPreview(null);
+      }
     }
   };
 
   const validateStep = (step) => {
     switch (step) {
       case 1:
-        return activeCartItems.length > 0;
+        return activeCartItems.length > 0 && stockWarnings.length === 0;
       case 2:
         return customerInfo.username && customerInfo.email && customerInfo.address;
       case 3:
@@ -137,6 +200,11 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
   };
 
   const nextStep = () => {
+    if (currentStep === 1 && stockWarnings.length > 0) {
+      alert('Please resolve stock availability issues before proceeding.');
+      return;
+    }
+    
     if (validateStep(currentStep) && currentStep < 4) {
       setCurrentStep(currentStep + 1);
     }
@@ -148,41 +216,59 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
     }
   };
 
-  const handleSubmit = () => {
-    if (validateStep(4)) {
-        const newOrder = {
-        orderId: `ORD-${Date.now()}`,
-        orderType: 'online',
-        createdBy: user?.email || customerInfo.email,
-        cashierName: null,
-        timestamp: new Date().toISOString(),
-        customer: customerInfo,
-        items: activeCartItems,
-        shipping: shippingInfo,
-        payment: paymentInfo,
-        total: getTotalPrice(),
-        status: 'pending', // Online orders start as pending, not completed
-        notes: orderNotes,
-        paymentProof: paymentProof?.name || null
-        };
+// Handle final order submission -nt
+const handleSubmit = () => {
+  if (!validateStock()) {
+    alert('Some items in your cart exceed available stock. Please adjust quantities.');
+    return;
+  }
 
-        // Pass the order to parent component for management
-        if (onOrderComplete) {
-        onOrderComplete(newOrder);
+  if (validateStep(4)) {
+    const processOrder = async () => {
+      let paymentProofData = null;
+      if (paymentProof) {
+        try {
+          const reader = new FileReader();
+          paymentProofData = await new Promise((resolve) => {
+            reader.onloadend = () => resolve(reader.result);
+            reader.readAsDataURL(paymentProof);
+          });
+        } catch (error) {
+          paymentProofData = paymentProof.name;
         }
-        
-        // Clear the cart to prevent duplicate orders
-        if (onUpdateCart) {
-        onUpdateCart([]);
-        }
-        
-        alert('Order placed successfully! Thank you for your purchase.');
-        console.log('Order Details:', newOrder);
-        
-        // Redirect to home page
-        navigate('/');
-    }
-  };
+      }
+
+      // Map frontend fields to backend fields
+      const newOrder = {
+       type: 'online',
+       customer: customerInfo,
+       items: activeCartItems,
+       total: getTotalPrice(),
+       status: 'pending',
+       date: new Date().toISOString(),
+       };
+
+      try {
+        await fetch('http://localhost:5000/online-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newOrder)
+        });
+      } catch (err) {
+        alert('Failed to log transaction!');
+        return;
+      }
+
+      if (onOrderComplete) onOrderComplete(newOrder);
+      if (onUpdateCart) onUpdateCart([]);
+      alert('Order placed successfully! Thank you for your purchase.');
+      navigate('/');
+    };
+    processOrder();
+  }
+};
+
+
 
   const StepIndicator = () => (
     <div className="row mb-4">
@@ -232,45 +318,92 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
     </div>
   );
 
+  // Stock Warning Alert Component
+  const StockWarningAlert = () => {
+    if (stockWarnings.length === 0) return null;
+
+    return (
+      <div className="alert alert-warning border-0 shadow-sm mb-4">
+        <div className="d-flex align-items-start">
+          <i className="fas fa-exclamation-triangle text-warning me-3 mt-1"></i>
+          <div className="flex-grow-1">
+            <h6 className="alert-heading fw-bold">Stock Availability Issue</h6>
+            <p className="mb-2">Some items in your cart exceed available stock:</p>
+            <ul className="mb-3">
+              {stockWarnings.map((warning, index) => (
+                <li key={index}>
+                  <strong>{warning.itemName}</strong>: 
+                  Requested {warning.requested}, Available {warning.available}
+                </li>
+              ))}
+            </ul>
+            <div className="d-flex gap-2">
+              <button 
+                className="btn btn-warning btn-sm"
+                onClick={fixStockQuantities}
+              >
+                <i className="fas fa-magic me-1"></i>
+                Auto-fix Quantities
+              </button>
+              <button 
+                className="btn btn-outline-secondary btn-sm"
+                onClick={() => navigate('/products/ingredients')}
+              >
+                <i className="fas fa-shopping-cart me-1"></i>
+                Continue Shopping
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const OrderSummary = () => (
     <div className="card h-100 border-0 shadow-sm">
       <div className="card-header bg-success text-white">
         <h5 className="mb-0">Order Summary</h5>
+        {stockWarnings.length > 0 && (
+          <small className="d-block mt-1">
+            <i className="fas fa-exclamation-triangle me-1"></i>
+            Stock issues detected
+          </small>
+        )}
       </div>
       <div className="card-body">
-        {activeCartItems.map((item) => (
-          <div key={`${item.id}-${item.selectedVariant?.id || 'default'}`} className="d-flex align-items-center mb-3">
-            <img 
-              src={item.image} 
-              alt={item.name}
-              className="rounded me-3" 
-              style={{ width: '40px', height: '40px', objectFit: 'cover' }}
-            />
-            <div className="flex-grow-1">
-              <h6 className="mb-1 small">{item.displayName || item.name}</h6>
-              <small className="text-muted">₱{item.price.toLocaleString()} x {item.quantity}</small>
+        {activeCartItems.map((item) => {
+          const warning = stockWarnings.find(w => 
+            w.itemId === item.id && 
+            (w.variantId ? w.variantId === item.selectedVariant?.id : !item.selectedVariant)
+          );
+          
+          return (
+            <div key={`${item.id}-${item.selectedVariant?.id || 'default'}`} 
+                 className={`d-flex align-items-center mb-3 ${warning ? 'border border-warning rounded p-2' : ''}`}>
+              <img 
+                src={item.image} 
+                alt={item.name}
+                className="rounded me-3" 
+                style={{ width: '40px', height: '40px', objectFit: 'cover' }}
+              />
+              <div className="flex-grow-1">
+                <h6 className="mb-1 small">{item.displayName || item.name}</h6>
+                <div className="small text-muted">₱{item.price.toLocaleString()} x {item.quantity}</div>
+                {warning && (
+                  <div className="text-warning small">
+                    <i className="fas fa-exclamation-triangle me-1"></i>
+                    Only {warning.available} available
+                  </div>
+                )}
+              </div>
+              <div className="fw-bold small">₱{(item.price * item.quantity).toLocaleString()}</div>
             </div>
-            <div className="fw-bold small">₱{(item.price * item.quantity).toLocaleString()}</div>
-          </div>
-        ))}
+          );
+        })}
         <hr />
-        <div className="table-responsive">
-          <table className="table table-borderless table-sm mb-0">
-            <tbody>
-              <tr>
-                <td className="fw-bold">Subtotal:</td>
-                <td className="text-end">₱{getSubtotal().toLocaleString()}</td>
-              </tr>
-              <tr>
-                <td className="fw-bold">Shipping:</td>
-                <td className="text-end">₱{shippingInfo.fee.toLocaleString()}</td>
-              </tr>
-              <tr className="border-top">
-                <td className="fw-bold h5">Total:</td>
-                <td className="text-end fw-bold h5 text-primary">₱{getTotalPrice().toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div className="d-flex justify-content-between align-items-center">
+          <span className="fw-bold h5 mb-0">Total:</span>
+          <span className="fw-bold h5 mb-0 text-primary">₱{getTotalPrice().toLocaleString()}</span>
         </div>
       </div>
       <div className="card-footer text-muted text-center bg-light border-0">
@@ -286,8 +419,15 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
           <div className="card h-100 border-0 shadow-sm">
             <div className="card-header bg-primary text-white">
               <h5 className="mb-0">Review Your Cart</h5>
+              {stockWarnings.length > 0 && (
+                <small className="d-block mt-1">
+                  <i className="fas fa-exclamation-triangle me-1"></i>
+                  {stockWarnings.length} item(s) have stock issues
+                </small>
+              )}
             </div>
             <div className="card-body">
+              <StockWarningAlert />
               {activeCartItems.map((item) => (
                 <div key={`${item.id}-${item.selectedVariant?.id || 'default'}`} className="d-flex align-items-center border-bottom py-3">
                   <img 
@@ -397,7 +537,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
             </div>
             <div className="card-body">
               <div className="mb-3">
-                <div className="form-check mb-3 p-3 border rounded">
+                <div className="form-check mb-3 p-3 border rounded shadow-sm">
                   <input 
                     className="form-check-input" 
                     type="radio" 
@@ -419,7 +559,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                   </label>
                 </div>
 
-                <div className="form-check mb-3 p-3 border rounded bg-light">
+                <div className="form-check mb-3 p-3 border rounded bg-light shadow-sm">
                   <input 
                     className="form-check-input" 
                     type="radio" 
@@ -485,7 +625,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
             <div className="card-body">
               <div className="mb-4">
                 {/* Cash Payment */}
-                <div className="form-check mb-3 p-3 border rounded">
+                <div className="form-check mb-3 p-3 border rounded shadow-sm">
                   <input 
                     className="form-check-input" 
                     type="radio" 
@@ -506,7 +646,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                 </div>
 
                 {/* GCash Payment */}
-                <div className="form-check mb-3 p-3 border rounded">
+                <div className="form-check mb-3 p-3 border rounded shadow-sm">
                   <input 
                     className="form-check-input" 
                     type="radio" 
@@ -527,7 +667,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                 </div>
 
                 {/* Bank Transfer */}
-                <div className="form-check mb-3 p-3 border rounded">
+                <div className="form-check mb-3 p-3 border rounded shadow-sm">
                   <input 
                     className="form-check-input" 
                     type="radio" 
@@ -608,9 +748,22 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                       onChange={handleFileUpload}
                     />
                     {paymentProof && (
-                      <div className="text-success small mt-1">
+                      <div className="text-success small mt-2">
                         <i className="fas fa-check me-1"></i>
                         File uploaded: {paymentProof.name}
+                      </div>
+                    )}
+                    {paymentProofPreview && (
+                      <div className="mt-3">
+                        <label className="form-label small">Preview:</label>
+                        <div className="border rounded p-2">
+                          <img 
+                            src={paymentProofPreview} 
+                            alt="Payment proof preview" 
+                            className="img-fluid"
+                            style={{ maxHeight: '200px', width: 'auto' }}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -664,9 +817,22 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                       onChange={handleFileUpload}
                     />
                     {paymentProof && (
-                      <div className="text-success small mt-1">
+                      <div className="text-success small mt-2">
                         <i className="fas fa-check me-1"></i>
                         File uploaded: {paymentProof.name}
+                      </div>
+                    )}
+                    {paymentProofPreview && (
+                      <div className="mt-3">
+                        <label className="form-label small">Preview:</label>
+                        <div className="border rounded p-2">
+                          <img 
+                            src={paymentProofPreview} 
+                            alt="Payment proof preview" 
+                            className="img-fluid"
+                            style={{ maxHeight: '200px', width: 'auto' }}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -716,7 +882,7 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
                 <button 
                   className="btn btn-success btn-lg"
                   onClick={handleSubmit}
-                  disabled={!validateStep(4)}
+                  disabled={!validateStep(4) || stockWarnings.length > 0}
                 >
                   <i className="fas fa-check me-2"></i>Place Order - ₱{getTotalPrice().toLocaleString()}
                 </button>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link } from 'react-router';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
+
 const Details = () => {
   // Sample data - you can replace this with props or API data
   const [invoiceData] = useState({

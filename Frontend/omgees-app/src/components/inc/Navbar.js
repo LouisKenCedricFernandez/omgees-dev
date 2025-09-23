@@ -70,7 +70,7 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
 
     return (
         <>
-            <nav className="navbar sticky-top navbar-expand-lg navbar-custom shadow mt-3">
+            <nav className="navbar fixed-top navbar-expand-lg navbar-custom shadow mt-3">
                 <div className="container-fluid">
                     <img src={omgeesLogo} alt="OMGees Logo" width="30" height="24" className="d-inline-block align-text-top navbar-logo me-2"/>
                     <Link to="/" className="navbar-brand fw-bold">OMGees</Link>
@@ -84,7 +84,7 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
                                 <Link to="/" className="nav-link px-3">Home</Link>
                             </li>
                             <li className="nav-item">
-                                <Link to="/about" className="nav-link px-3">About us</Link>
+                                <Link to="/profile" className="nav-link px-3">Profile</Link>
                             </li>
                             <li className="nav-item dropdown">
                                 <a 
