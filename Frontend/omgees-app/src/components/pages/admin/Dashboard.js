@@ -1,81 +1,113 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import ComposedChart from './charts/ComposedChart';
+import axios from 'axios';
 
 function Dashboard({ user, onLogout, activities = [], orders = [], inventory = [] }) {
-  
+  const [dborders, setdbOrders] = useState(orders);
+  //if the activities database is made -nt
+  //const [activities, setActivities] = useState(initialActivities);
+  const [dbinventory, setdbInventory] = useState(inventory);
+
+  console.log('User object:', user);
+
+  // Fetch latest orders and inventory from backend
+  useEffect(() => {
+    axios.get('http://localhost:5000/manage-orders').then(res => setdbOrders(res.data));
+    axios.get('http://localhost:5000/inventory').then(res => setdbInventory(res.data));
+    // for the activity log -nt
+    // axios.get('http://localhost:5000/activities').then(res => setActivities(res.data));
+  }, []);
+
+  useEffect(() => {
+  console.log('dbinventory:', dbinventory);
+  }, [dbinventory]);
+
   // Calculate real-time statistics from actual data
   const statistics = useMemo(() => {
-    const today = new Date().toDateString();
-    const todayOrders = orders.filter(order => 
-      new Date(order.timestamp).toDateString() === today
-    );
-    
-    const todayRevenue = todayOrders
-      .filter(order => order.status === 'completed')
-      .reduce((sum, order) => sum + order.total, 0);
-    
-    const totalUsers = [...new Set(orders.map(order => 
-      order.customer.email || order.customer.name
-    ))].length;
-    
-    const activeOrders = orders.filter(order => 
-      ['pending', 'processing', 'ready'].includes(order.status)
-    ).length;
-    
-    return {
-      totalUsers: totalUsers || 0,
-      activeOrders,
-      todayRevenue,
-      systemUptime: 98 // You can implement real uptime calculation
-    };
-  }, [orders]);
+  const today = new Date().toDateString();
+  const todayOrders = dborders.filter(order => 
+    new Date(order.date).toDateString() === today
+  );
+  
+
+
+  const todayRevenue = todayOrders
+    .filter(order => order.status === 'completed')
+    .reduce((sum, order) => sum + order.total, 0);
+
+  const totalUsers = [...new Set(dborders.map(order => 
+    order.customer.email || order.customer.name
+  ))].length;
+
+  const activeOrders = dborders.filter(order => 
+    ['pending', 'processing', 'ready'].includes(order.status)
+  ).length;
+  
+  return {
+         totalUsers: totalUsers || 0,
+        activeOrders,
+         todayRevenue,
+      systemUptime: 98 // Placeholder, replace with real uptime if available
+      };
+        }, [dborders]);
 
   // Get low stock alerts from real inventory data
   const lowStockAlerts = useMemo(() => {
-    return inventory.filter(item => 
+    return dbinventory.filter(item => 
       item.stock <= item.lowStockThreshold && 
       item.stock > 0 && 
       item.status === 'active'
     );
-  }, [inventory]);
+  }, [dbinventory]);
 
   // Get out of stock items
   const outOfStockItems = useMemo(() => {
-    return inventory.filter(item => 
+    return dbinventory.filter(item => 
       item.stock === 0 && item.status === 'active'
     );
-  }, [inventory]);
+  }, [dbinventory]);
 
-  // Process sales data for the ComposedChart
-  const salesChartData = useMemo(() => {
-    const last7Days = [];
-    const today = new Date();
-    
-    // Generate last 7 days
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      const dateStr = date.toDateString();
-      
-      const dayOrders = orders.filter(order => 
-        new Date(order.timestamp).toDateString() === dateStr &&
-        order.status === 'completed'
-      );
-      
-      const revenue = dayOrders.reduce((sum, order) => sum + order.total, 0);
-      const orderCount = dayOrders.length;
-      
-      last7Days.push({
-        date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        revenue: revenue,
-        orders: orderCount,
-        fullDate: dateStr
-      });
-    }
-    
-    return last7Days;
-  }, [orders]);
+  dborders.forEach(order => {
+  if (!order.date || isNaN(new Date(order.date).getTime())) {
+    console.warn('Order with invalid date:', order);
+  }
+});
+
+// Update getDateString and salesChartData
+const getDateString = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); // "YYYY-MM-DD" or null
+};
+
+const salesChartData = useMemo(() => {
+  const last7Days = [];
+  const today = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    const dateStr = date.toISOString().slice(0, 10);
+
+    const dayOrders = dborders.filter(order => {
+      const orderDateStr = getDateString(order.date);
+      return orderDateStr && orderDateStr === dateStr && order.status === 'completed';
+    });
+
+    const revenue = dayOrders.reduce((sum, order) => sum + order.total, 0);
+    const orderCount = dayOrders.length;
+
+    last7Days.push({
+      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      revenue,
+      orders: orderCount,
+      fullDate: dateStr
+    });
+  }
+  return last7Days;
+}, [dborders]);
+
+
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -177,7 +209,9 @@ function Dashboard({ user, onLogout, activities = [], orders = [], inventory = [
             <div className="card bg-info text-white border-0 shadow-sm">
               <div className="card-body d-flex align-items-center">
                 <div className="flex-grow-1">
-                  <h4 className="mb-1">{inventory.filter(i => i.status === 'active').length}</h4>
+                  <h4 className="mb-1">
+                    {dbinventory.filter(i => (i.product_status || '').toLowerCase() === 'active').length}
+                  </h4>
                   <p className="mb-0">Active Products</p>
                 </div>
                 <i className="bi bi-box fs-2 opacity-75"></i>
@@ -277,5 +311,6 @@ function Dashboard({ user, onLogout, activities = [], orders = [], inventory = [
     </div>
   );
 }
+
 
 export default Dashboard;

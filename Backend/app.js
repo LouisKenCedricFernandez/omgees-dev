@@ -79,6 +79,7 @@ app.get('/users', (req, res) => {
 // Online order endpoint
 
 app.post('/online-order', (req, res) => {
+  console.log('Received order:', req.body);
   const order = req.body;
   // Parse items if they are sent as a JSON string
   let items = order.items;
@@ -97,15 +98,15 @@ app.post('/online-order', (req, res) => {
     }
 
     const sql = "INSERT INTO orders (type, customer, items, total, status, date) VALUES (?, ?, ?, ?, ?, ?)";
-    const values = [
-      order.type || order.orderType || "online",
-      order.customer || order.cashierName || "",
-      JSON.stringify(items),
-      order.total,
-      order.status || "pending",
-      order.date || order.timestamp
-    ];
-
+   
+      const values = [
+        order.type || order.orderType || "online",
+        JSON.stringify(order.customer), 
+        JSON.stringify(items),
+        order.total,
+        order.status || "pending",
+        order.date || new Date()
+        ]; 
     db.query(sql, values, (err, data) => {
       if (err) {
         return db.rollback(() => {
@@ -204,7 +205,7 @@ app.post('/login', (req, res) => {
                 user_type: data[0].user_type,
                 user: {
                     id: data[0].id,
-                    name: data[0].name,
+                    name: data[0].name, 
                     email: data[0].email,
                     // ...add other fields as needed
                 }
@@ -244,6 +245,8 @@ app.post('/update-stock', (req, res) => {
     ];
     db.query(sql, values, (err, data) => {
         if (err) {
+              console.error('Order insert error:', err); // <-- Make sure this logs
+
             console.error('SQL error:', err);
             return res.status(500).json({ error: "Failed to update product" });
         }
@@ -398,6 +401,35 @@ app.get('/packaging', (req, res) => {
     });
 });
 
+
+app.post('/activity-log', (req, res) => {
+    const sql = "INSERT INTO activity (`activity`, `user`, `type`, `timestamp`, `details`) VALUES (?)";
+    const values = [
+        req.body.activity,
+        req.body.user,
+        req.body.type,
+        req.body.timestamp || new Date(),
+        req.body.details || null
+    ];
+    db.query(sql, [values], (err, data) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ error: "Failed to log activity" });
+        }
+        return res.json({ success: true });
+    });
+});
+
+app.get('/activity', (req, res) => {
+    const sql = "SELECT * FROM activity ORDER BY timestamp DESC";
+    db.query(sql, (err, data) => {
+        if (err) {
+            console.error(err);
+            return res.status(500).json({ error: "Failed to fetch activity logs" });
+        }
+        return res.json(data);
+    });
+});
 
 // Basic route
 app.get("/", (req, res) => {

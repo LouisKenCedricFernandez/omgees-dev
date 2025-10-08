@@ -57,6 +57,18 @@ const updateProduct = (updatedProduct) => {
           : product
       ));
       setEditingProduct(null);
+
+      // --- Activity Log API call ---
+      axios.post('http://localhost:5000/activity-log', {
+        activity: 'Updated Product',
+        user: 'inventory-staff', // Replace with actual user if available
+        type: 'inventory',
+        details: `Product: ${updatedProduct.name} (${updatedProduct.size}), New Stock: ${updatedProduct.stock}`,
+        timestamp: new Date().toISOString()
+      }).catch(err => {
+        console.error('Failed to log activity:', err);
+      });
+      // --- End Activity Log ---
     })
     .catch(error => {
       alert('Failed to update product!');

@@ -5,45 +5,74 @@ import axios from 'axios';
 function Logs({ transactions = [], activities = [] }) {
   // Filter states
   const [dbOrders, setDbOrders] = useState([]);
+  const [dbActivities, setDbActivities] = useState([]); // <-- Add this
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [activityTypeFilter, setActivityTypeFilter] = useState('all');
   const [userTypeFilter, setUserTypeFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('activities'); // 'activities' or 'transactions'
 
-  // Process activities with more details
-  const processedActivities = useMemo(() => {
-    return activities.map(activity => ({
-      ...activity,
-      displayTime: new Date(activity.timestamp).toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    }));
-  }, [activities]);
-
-   // Fetch orders from backend on component mount -nt
+  // Fetch orders and activities from backend on mount
   useEffect(() => {
-  axios.get('http://localhost:5000/manage-orders')
-    .then(res => {
-      setDbOrders(res.data);
-    })
-    .catch(err => {
-      console.error('Failed to fetch orders:', err);
-    });
-}, []);
+    axios.get('http://localhost:5000/manage-orders')
+      .then(res => setDbOrders(res.data))
+      .catch(err => console.error('Failed to fetch orders:', err));
 
-  // Get unique activity types and user types for filters
+    axios.get('http://localhost:5000/activity')
+      .then(res => setDbActivities(res.data))
+      .catch(err => console.error('Failed to fetch activities:', err));
+  }, []);
+
+  // Use dbActivities for logs table
+  const processedActivities = useMemo(() => {
+  return dbActivities.map(activity => {
+    // Provide defaults for missing fields
+    const type = activity.type || 'unknown';
+    const userType = activity.userType || 'unknown';
+    const action = activity.activity || activity.action || 'No Action';
+    const color = activity.color || 'secondary';
+    const icon = activity.icon || 'info-circle';
+    let details = {};
+    if (activity.details) {
+      try {
+        if (typeof activity.details === 'string' && activity.details.trim() !== '') {
+          details = JSON.parse(activity.details);
+        } else if (typeof activity.details === 'object') {
+          details = activity.details;
+        }
+      } catch {
+        details = {};
+      }
+    }
+    return {
+      ...activity,
+      type,
+      userType,
+      action,
+      color,
+      icon,
+      details,
+      displayTime: activity.timestamp
+        ? new Date(activity.timestamp).toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        : 'N/A'
+    };
+  });
+}, [dbActivities]);
+
+  // Get unique activity types and user types for filters (use processedActivities)
   const activityTypes = useMemo(() => {
-    return [...new Set(activities.map(a => a.type))];
-  }, [activities]);
+    return [...new Set(processedActivities.map(a => a.type))];
+  }, [processedActivities]);
 
   const userTypes = useMemo(() => {
-    return [...new Set(activities.map(a => a.userType))];
-  }, [activities]);
+    return [...new Set(processedActivities.map(a => a.userType))];
+  }, [processedActivities]);
 
   // Filter activities
   const filteredActivities = useMemo(() => {
@@ -59,8 +88,6 @@ function Logs({ transactions = [], activities = [] }) {
       return dateInRange && typeMatch && userMatch;
     });
   }, [processedActivities, startDate, endDate, activityTypeFilter, userTypeFilter]);
-
-// ...existing code...
 
 // Filter transactions -nt
 const filteredTransactions = useMemo(() => {
@@ -261,20 +288,18 @@ const filteredTransactions = useMemo(() => {
         <tbody>
           {filteredTransactions.length > 0 ? (
             filteredTransactions.map(transaction => (
-              <tr key={transaction.orderId}>
+              <tr key={transaction.order_id}>
                 <th scope="row" className="fw-normal">
-                  <code className="small">{transaction.orderId}</code>
+                  <code className="small">{transaction.order_id}</code>
                 </th>
                 <td className="text-center">
                   <div>
-                    <strong className="small">{transaction.customer.name || transaction.customer.username}</strong>
-                    {transaction.customer.email && <br/>}
-                    {transaction.customer.email && <small className="text-muted">{transaction.customer.email}</small>}
+                    <strong className="small">{transaction.customer}</strong>
                   </div>
                 </td>
                 <td className="text-center">
-                  <span className={`badge ${transaction.orderType === 'online' ? 'bg-info' : 'bg-success'}`}>
-                    {transaction.orderType === 'online' ? 'Online' : 'In-Store'}
+                  <span className={`badge ${transaction.type === 'online' ? 'bg-info' : 'bg-success'}`}>
+                    {transaction.type === 'online' ? 'Online' : 'In-Store'}
                   </span>
                 </td>
                 <td className="text-center">
@@ -286,7 +311,7 @@ const filteredTransactions = useMemo(() => {
                   </span>
                 </td>
                 <td className="text-center">
-                  <small>{new Date(transaction.timestamp).toLocaleString()}</small>
+                  <small>{new Date(transaction.date).toLocaleDateString()}</small>
                 </td>
                 <td className="text-center">
                   <Link to="/admin/logs/details" className="btn btn-sm btn-outline-primary">
@@ -335,7 +360,7 @@ const filteredTransactions = useMemo(() => {
                       onClick={() => setActiveTab('activities')}
                     >
                       <i className="bi bi-activity me-2"></i>
-                      Activity Logs ({activities.length})
+                      Activity Logs ({processedActivities.length})
                     </button>
                   </li>
                   <li className="nav-item">

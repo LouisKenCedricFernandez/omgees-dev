@@ -38,7 +38,18 @@ function Checkout({ cartItems = [], onUpdateCart, onOrderComplete, user }) {
   const [paymentProof, setPaymentProof] = useState(null);
   const [paymentProofPreview, setPaymentProofPreview] = useState(null);
   const [stockWarnings, setStockWarnings] = useState([]);
-  const activeCartItems = cartItems;
+  const normalizedCartItems = cartItems.map(item => ({
+    ...item,
+    image: item.image
+      ? item.image.startsWith('http')
+        ? item.image
+        : `http://localhost:5000/${item.image.replace(/^public\//, '').replace(/^\/?uploads\//, 'uploads/')}`
+      : "https://via.placeholder.com/150"
+  }));
+
+  console.log('Cart item images:', normalizedCartItems.map(i => i.image));
+
+  const activeCartItems = normalizedCartItems;
 
   // Stock validation function wrapped in useCallback
   const validateStock = useCallback(() => {
@@ -240,19 +251,23 @@ const handleSubmit = () => {
 
       // Map frontend fields to backend fields
       const newOrder = {
-       type: 'online',
-       customer: customerInfo,
-       items: activeCartItems,
-       total: getTotalPrice(),
-       status: 'pending',
-       date: new Date().toISOString(),
-       };
+        type: 'online',
+        customer: customerInfo,
+        items: activeCartItems,
+        total: getTotalPrice(),
+        status: 'pending',
+        date: new Date().toISOString(),
+        shipping: shippingInfo,
+        payment: paymentInfo,
+        notes: orderNotes,
+        paymentProof: paymentProofData
+      };
 
       try {
         await fetch('http://localhost:5000/online-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newOrder)
+           body: JSON.stringify(newOrder)
         });
       } catch (err) {
         alert('Failed to log transaction!');

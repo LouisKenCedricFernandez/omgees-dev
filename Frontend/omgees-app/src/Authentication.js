@@ -123,7 +123,7 @@ export const AuthProvider = ({ children }) => {
         email: email,
         name: user.name,
         type: user.type,
-        phone: user.phone,
+        phone: user.contact,
         address: user.address
       };
     }

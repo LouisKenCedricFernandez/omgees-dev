@@ -37,10 +37,27 @@ const ensureItemsArray = (items) => {
   useEffect(() => {
   axios.get('http://localhost:5000/manage-orders')
     .then(res => {
-      const orders = res.data.map(order => ({
-        ...order,
-        items: ensureItemsArray(order.items)
-      }));
+      const orders = res.data.map(order => {
+        let customerObj = {};
+        if (typeof order.customer === 'string') {
+          try {
+            customerObj = JSON.parse(order.customer);
+          } catch (e) {
+            // If not JSON, treat as plain string (e.g., cashier name)
+            customerObj = { name: order.customer };
+          }
+        } else if (typeof order.customer === 'object' && order.customer !== null) {
+          customerObj = order.customer;
+        }
+        return {
+          ...order,
+          orderId: order.order_id || order.orderId || order.id,
+          type: order.type || order.orderType,
+          customer: customerObj,
+          items: ensureItemsArray(order.items),
+          timestamp: order.timestamp || order.date
+        };
+      });
       setDborders(orders);
     })
     .catch(err => console.error(err));
@@ -65,7 +82,7 @@ const ensureItemsArray = (items) => {
   const end = endDate ? new Date(endDate) : null;
   const dateInRange = (!start || orderDate >= start) && (!end || orderDate <= end);
   const statusMatch = statusFilter === 'all' || order.status.toLowerCase() === statusFilter.toLowerCase();
-  const typeMatch = typeFilter === 'all' || order.orderType === typeFilter;
+  const typeMatch = typeFilter === 'all' || order.type === typeFilter;
   return dateInRange && statusMatch && typeMatch;
 });
 
@@ -90,12 +107,10 @@ const ensureItemsArray = (items) => {
   };
 
   const formatDate = (timestamp) => {
-    return new Date(timestamp).toLocaleDateString('en-US', {
+    return new Date(timestamp).toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
     });
   };
 
@@ -234,7 +249,7 @@ const ensureItemsArray = (items) => {
                       </tr>
                       <tr>
                         <td><strong>Date:</strong></td>
-                        <td>{formatDate(selectedOrder.timestamp)}</td>
+                        <td>{formatDate(selectedOrder.date)}</td>
                       </tr>
                       <tr>
                         <td><strong>Status:</strong></td>
@@ -430,8 +445,8 @@ const ensureItemsArray = (items) => {
                               <code className="small">{order.orderId}</code>
                             </th>
                             <td className="text-center">
-                              <span className={`badge ${order.orderType === 'online' ? 'bg-info' : 'bg-success'}`}>
-                                {order.orderType === 'online' ? 'Online' : 'In-Store'}
+                              <span className={`badge ${order.type === 'online' ? 'bg-info' : 'bg-success'}`}>
+                                {order.type === 'online' ? 'Online' : 'In-Store'}
                               </span>
                             </td>
                             <td className="text-center">
@@ -453,7 +468,7 @@ const ensureItemsArray = (items) => {
                               {getStatusBadge(order.status)}
                             </td>
                             <td className="text-center">
-                              <small>{formatDate(order.timestamp)}</small>
+                              <small>{formatDate(order.date)}</small>
                             </td>
                             <td className="text-center">
                               <button 

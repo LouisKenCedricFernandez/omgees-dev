@@ -1,27 +1,29 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import axios from 'axios';
 
-function Reports({ transactions = [], inventory = [] }) {
+function Reports() {
+  const [transactions, setTransactions] = useState([]);
+  const [inventory, setInventory] = useState([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [movementFilter, setMovementFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showExportModal, setShowExportModal] = useState(false);
-
-  const [reports, setReports] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-
-    // Fetch reports on component mount -nt
+  const [loading, setLoading] = useState(false);
+  // Fetch transactions and inventory from backend
   useEffect(() => {
-  axios
-    .get('http://localhost:5000/reports')
-    .then(response => {
-      setReports(response.data);
+  setLoading(true);
+  Promise.all([
+    axios.get('http://localhost:5000/manage-orders'), // <-- fixed endpoint!
+    axios.get('http://localhost:5000/inventory')
+  ])
+    .then(([transactionsRes, inventoryRes]) => {
+      setTransactions(transactionsRes.data);
+      setInventory(inventoryRes.data);
       setLoading(false);
     })
     .catch(error => {
-      console.error('Error fetching reports:', error);
+      console.error('Error fetching data:', error);
       setLoading(false);
     });
 }, []);
@@ -47,17 +49,37 @@ function Reports({ transactions = [], inventory = [] }) {
     // Create a lookup map for inventory variants
     const variantLookup = {};
     inventory.forEach(product => {
-      if (product.variants) {
+      if (product.variants && Array.isArray(product.variants)) {
         product.variants.forEach(variant => {
           variantLookup[variant.id] = {
             ...variant,
-            productName: product.name,
-            category: product.category,
-            supplier: product.supplier
+            productName: product.product_name || product.name,
+            category: product.product_category || product.category,
+            supplier: product.product_supplier || product.supplier
           };
         });
+      } else {
+        // Treat product itself as a variant
+        variantLookup[product.product_id || product.id] = {
+          id: product.product_id || product.id,
+          productName: product.product_name || product.name,
+          category: product.product_category || product.category,
+          supplier: product.product_supplier || product.supplier,
+          size: product.product_variant || product.size,
+          stock: product.product_totalstock || product.stock,
+          status: product.product_status || product.status,
+          lowStockThreshold: product.lowStockThreshold || 0
+        };
       }
     });
+
+    inventory.forEach(product => {
+  if (product.variants) {
+    product.variants.forEach(variant => {
+      // ...
+    });
+  }
+});
 
     console.log('Variant lookup created:', Object.keys(variantLookup).length);
 
@@ -65,7 +87,16 @@ function Reports({ transactions = [], inventory = [] }) {
     const variantSales = {};
     
     filteredTransactions.forEach(transaction => {
-      transaction.items.forEach(item => {
+      let items = transaction.items;
+      if (typeof items === "string") {
+        try {
+          items = JSON.parse(items);
+        } catch (e) {
+          items = [];
+        }
+      }
+      if (!Array.isArray(items)) items = [];
+      items.forEach(item => {
         // Handle different item structures
         let variantId;
         let itemName;
@@ -74,14 +105,14 @@ function Reports({ transactions = [], inventory = [] }) {
         
         if (item.selectedVariant) {
           // Customer orders with selected variants
-          variantId = item.selectedVariant.id;
+          variantId = item.selectedVariant.id || item.selectedVariant.product_id;
           itemName = item.name;
-          itemSize = item.selectedVariant.size;
+          itemSize = item.selectedVariant.size || item.selectedVariant.product_variant;
         } else {
           // Cashier orders or direct items
-          variantId = item.id;
-          itemName = item.displayName || item.name;
-          itemSize = item.size;
+          variantId = item.id || item.product_id;
+          itemName = item.displayName || item.name || item.product_name;
+          itemSize = item.size || item.product_variant;
         }
         
         // Look up variant details from inventory
@@ -368,39 +399,45 @@ function Reports({ transactions = [], inventory = [] }) {
   return (
     <div className="container-fluid bg-light min-vh-100">
       <div className="container py-5">
-        <div className="row">
-          <div className="col-12">
-            <div className="card border-0 shadow-sm">
-              {/* Report Header */}
-              <div className="card-header bg-white border-0 pb-4">
-                <div className="d-flex justify-content-between align-items-center mb-3">
-                  <h2 className="mb-0">Sales & Product Movement Report</h2>
-                  <span className="badge bg-primary">{filteredProducts.length} variants</span>
+        {loading ? (
+          <div className="text-center py-5">
+            <div className="spinner-border text-primary" role="status"></div>
+            <div className="mt-3">Loading report data...</div>
+          </div>
+        ) : (
+          <div className="row">
+            <div className="col-12">
+              <div className="card border-0 shadow-sm">
+                {/* Report Header */}
+                <div className="card-header bg-white border-0 pb-4">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <h2 className="mb-0">Sales & Product Movement Report</h2>
+                    <span className="badge bg-primary">{filteredProducts.length} variants</span>
+                  </div>
+                  {renderFilters()}
                 </div>
-                {renderFilters()}
-              </div>
-              
-              {/* Report Table */}
-              <div className="card-body p-0 mt-3">
-                <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
-                  <table className="table table-hover mb-0">
-                    {renderTableHeader()}
-                    <tbody>
-                      {filteredProducts.length > 0 
-                        ? filteredProducts.map(renderTableRow)
-                        : renderEmptyState()
-                      }
-                    </tbody>
-                    {filteredProducts.length > 0 && renderTableFooter()}
-                  </table>
+                
+                {/* Report Table */}
+                <div className="card-body p-0 mt-3">
+                  <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
+                    <table className="table table-hover mb-0">
+                      {renderTableHeader()}
+                      <tbody>
+                        {filteredProducts.length > 0 
+                          ? filteredProducts.map(renderTableRow)
+                          : renderEmptyState()
+                        }
+                      </tbody>
+                      {filteredProducts.length > 0 && renderTableFooter()}
+                    </table>
+                  </div>
                 </div>
+                
               </div>
-              
             </div>
           </div>
-        </div>
+        )}
       </div>
-
       {/* Export Modal */}
       <ExportModal />
     </div>

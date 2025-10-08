@@ -14,17 +14,18 @@ function CreateOrder({ user, onOrderComplete }) {
     axios.get('http://localhost:5000/inventory')
       .then(res => {
         if (Array.isArray(res.data)) {
-          // Normalize fields for frontend use
           const normalized = res.data.map(product => ({
             id: product.product_id ?? product.id,
-            baseProductId: product.baseProductId ?? product.id ?? 0,
+            baseProductId: product.id ?? 0,
             name: product.product_name ?? product.name ?? "",
             displayName: `${product.product_name ?? product.name ?? ""} (${product.product_variant ?? product.size ?? ""})`,
             price: product.product_price ?? product.price ?? 0,
             stock: product.product_totalstock ?? product.stock ?? 0,
             size: product.product_variant ?? product.size ?? "",
             category: product.product_category ?? product.category ?? "",
-            image: product.image ?? "https://via.placeholder.com/150",
+            image: product.product_image
+  ? `http://localhost:5000/${product.product_image.replace(/^public\//, '').replace(/^\/?uploads\//, 'uploads/')}`
+  : (product.image || "https://via.placeholder.com/150"), 
             status: product.product_status ?? product.status ?? "In Stock"
           }));
           setInventory(normalized);
@@ -176,20 +177,33 @@ function CreateOrder({ user, onOrderComplete }) {
     if (response.data.success) {
       // For each item in the order, update stock and sold
       cartItems.forEach(item => {
-  axios.post('http://localhost:5000/update-stock', {
-    product_id: item.id,
-    updated_data: {
-      product_name: item.name,
-      product_category: item.category,
-      product_variant: item.size,
-      product_totalstock: item.stock - item.quantity,
-      product_price: item.price,
-      product_description: item.description || "",
-      product_supplier: item.supplier || "",
-      product_totalsold: (item.sold || 0) + item.quantity
-    }
-  });
-});
+        axios.post('http://localhost:5000/update-stock', {
+          product_id: item.id,
+          updated_data: {
+            product_name: item.name,
+            product_category: item.category,
+            product_variant: item.size,
+            product_totalstock: item.stock - item.quantity,
+            product_price: item.price,
+            product_description: item.description || "",
+            product_supplier: item.supplier || "",
+            product_totalsold: (item.sold || 0) + item.quantity
+          }
+        });
+      });
+
+      // --- Add this block to log activity ---
+      axios.post('http://localhost:5000/activity-log', {
+      activity: 'Created Order',
+      user: user?.email || 'cashier@store.com',
+      type: 'order',
+      details: `Order ID: ${newOrder.orderId}, Total: ₱${getTotal().toLocaleString()}`,
+      timestamp: new Date().toISOString()
+      }).catch(err => {
+        console.error('Failed to log activity:', err);
+      });
+      // --- End activity log block ---
+
       // Optionally show a success message or do something else
       console.log('Order/payment recorded in database');
     } else {
