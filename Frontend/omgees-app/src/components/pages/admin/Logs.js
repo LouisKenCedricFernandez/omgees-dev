@@ -1,16 +1,20 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import axios from 'axios';
+import OrderDetailsModal from './Details';
 
 function Logs({ transactions = [], activities = [] }) {
   // Filter states
   const [dbOrders, setDbOrders] = useState([]);
-  const [dbActivities, setDbActivities] = useState([]); // <-- Add this
+  const [dbActivities, setDbActivities] = useState([]); 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [activityTypeFilter, setActivityTypeFilter] = useState('all');
   const [userTypeFilter, setUserTypeFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('activities'); // 'activities' or 'transactions'
+  const [activeTab, setActiveTab] = useState('activities');
+  
+  // Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
 
   // Fetch orders and activities from backend on mount
   useEffect(() => {
@@ -25,47 +29,46 @@ function Logs({ transactions = [], activities = [] }) {
 
   // Use dbActivities for logs table
   const processedActivities = useMemo(() => {
-  return dbActivities.map(activity => {
-    // Provide defaults for missing fields
-    const type = activity.type || 'unknown';
-    const userType = activity.userType || 'unknown';
-    const action = activity.activity || activity.action || 'No Action';
-    const color = activity.color || 'secondary';
-    const icon = activity.icon || 'info-circle';
-    let details = {};
-    if (activity.details) {
-      try {
-        if (typeof activity.details === 'string' && activity.details.trim() !== '') {
-          details = JSON.parse(activity.details);
-        } else if (typeof activity.details === 'object') {
-          details = activity.details;
+    return dbActivities.map(activity => {
+      const type = activity.type || 'unknown';
+      const userType = activity.userType || 'unknown';
+      const action = activity.activity || activity.action || 'No Action';
+      const color = activity.color || 'secondary';
+      const icon = activity.icon || 'info-circle';
+      let details = {};
+      if (activity.details) {
+        try {
+          if (typeof activity.details === 'string' && activity.details.trim() !== '') {
+            details = JSON.parse(activity.details);
+          } else if (typeof activity.details === 'object') {
+            details = activity.details;
+          }
+        } catch {
+          details = {};
         }
-      } catch {
-        details = {};
       }
-    }
-    return {
-      ...activity,
-      type,
-      userType,
-      action,
-      color,
-      icon,
-      details,
-      displayTime: activity.timestamp
-        ? new Date(activity.timestamp).toLocaleString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })
-        : 'N/A'
-    };
-  });
-}, [dbActivities]);
+      return {
+        ...activity,
+        type,
+        userType,
+        action,
+        color,
+        icon,
+        details,
+        displayTime: activity.timestamp
+          ? new Date(activity.timestamp).toLocaleString('en-US', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : 'N/A'
+      };
+    });
+  }, [dbActivities]);
 
-  // Get unique activity types and user types for filters (use processedActivities)
+  // Get unique activity types and user types for filters
   const activityTypes = useMemo(() => {
     return [...new Set(processedActivities.map(a => a.type))];
   }, [processedActivities]);
@@ -89,25 +92,25 @@ function Logs({ transactions = [], activities = [] }) {
     });
   }, [processedActivities, startDate, endDate, activityTypeFilter, userTypeFilter]);
 
-// Filter transactions -nt
-const filteredTransactions = useMemo(() => {
-  return dbOrders.filter(transaction => {
-    const isActualTransaction =
-      transaction.order_id && // <-- match DB field
-      transaction.customer &&
-      (transaction.total !== undefined && transaction.total !== null) &&
-      (transaction.type === 'online' || transaction.type === 'in-store'); // <-- match DB field
+  // Filter transactions
+  const filteredTransactions = useMemo(() => {
+    return dbOrders.filter(transaction => {
+      const isActualTransaction =
+        transaction.order_id && 
+        transaction.customer &&
+        (transaction.total !== undefined && transaction.total !== null) &&
+        (transaction.type === 'online' || transaction.type === 'in-store'); 
 
-    const transactionDate = new Date(transaction.date); // <-- match DB field
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
+      const transactionDate = new Date(transaction.date); 
 
-    const dateInRange = (!start || transactionDate >= start) && (!end || transactionDate <= end);
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
 
-    return isActualTransaction && dateInRange;
-  });
-}, [dbOrders, startDate, endDate]);
+      const dateInRange = (!start || transactionDate >= start) && (!end || transactionDate <= end);
 
+      return isActualTransaction && dateInRange;
+    });
+  }, [dbOrders, startDate, endDate]);
 
   const resetFilters = () => {
     setStartDate('');
@@ -127,11 +130,22 @@ const filteredTransactions = useMemo(() => {
     const statusColors = {
       'completed': 'success',
       'pending': 'warning',
-      'processing': 'info',
+      'verified': 'info',
       'cancelled': 'danger',
-      'ready': 'primary'
+      'in-transit': 'primary'
     };
     return statusColors[status] || 'secondary';
+  };
+
+  // Handle view order details
+  const handleViewOrder = (order) => {
+    setSelectedOrder(order);
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setSelectedOrder(null);
   };
 
   // Render components
@@ -209,7 +223,7 @@ const filteredTransactions = useMemo(() => {
             <th scope="col">Activity</th>
             <th scope="col" className="text-center">User</th>
             <th scope="col" className="text-center">Type</th>
-            <th scope="col" className="text-center">Timestamp</th>
+            <th scope="col" className="text-center">Time</th>
             <th scope="col" className="text-center">Details</th>
           </tr>
         </thead>
@@ -231,12 +245,16 @@ const filteredTransactions = useMemo(() => {
                 <td className="text-center">
                   <div>
                     <strong>{activity.user}</strong>
-                    <br />
-                    <span className={`badge bg-${activity.userType === 'admin' ? 'danger' : 
-                                                 activity.userType === 'cashier' ? 'success' : 
-                                                 activity.userType === 'inventory_manager' ? 'warning' : 'info'}`}>
-                      {activity.userType.replace('_', ' ')}
-                    </span>
+                    {activity.userType !== 'unknown' && (
+                      <>
+                        <br />
+                        <span className={`badge bg-${activity.userType === 'admin' ? 'danger' : 
+                                                     activity.userType === 'cashier' ? 'success' : 
+                                                     activity.userType === 'inventory_manager' ? 'warning' : 'info'}`}>
+                          {activity.userType.replace('_', ' ')}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </td>
                 <td className="text-center">
@@ -249,7 +267,15 @@ const filteredTransactions = useMemo(() => {
                 </td>
                 <td className="text-center">
                   <small>
-                    {activity.details?.customer && <div>Customer: {activity.details.customer}</div>}
+                    {activity.details?.customer && (
+                      <div>
+                        Customer: {
+                          typeof activity.details.customer === 'string'
+                            ? activity.details.customer
+                            : activity.details.customer.name || activity.details.customer.username || activity.details.customer.email || JSON.stringify(activity.details.customer)
+                        }
+                      </div>
+                    )}
                     {activity.details?.total && <div>{formatCurrency(activity.details.total)}</div>}
                     {activity.details?.itemCount && <div>{activity.details.itemCount} items</div>}
                     {activity.details?.orderId && <div>Order: {activity.details.orderId}</div>}
@@ -294,7 +320,11 @@ const filteredTransactions = useMemo(() => {
                 </th>
                 <td className="text-center">
                   <div>
-                    <strong className="small">{transaction.customer}</strong>
+                    <strong className="small">
+                      {typeof transaction.customer === 'string'
+                        ? transaction.customer
+                        : transaction.customer?.name || transaction.customer?.username || transaction.customer?.email || JSON.stringify(transaction.customer)}
+                    </strong>
                   </div>
                 </td>
                 <td className="text-center">
@@ -307,16 +337,19 @@ const filteredTransactions = useMemo(() => {
                 </td>
                 <td className="text-center">
                   <span className={`badge bg-${getStatusColor(transaction.status)}`}>
-                    {transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1)}
+                    {transaction.status === 'cancelled' ? 'Rejected' : transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1)}
                   </span>
                 </td>
                 <td className="text-center">
                   <small>{new Date(transaction.date).toLocaleDateString()}</small>
                 </td>
                 <td className="text-center">
-                  <Link to="/admin/logs/details" className="btn btn-sm btn-outline-primary">
+                  <button 
+                    className="btn btn-sm btn-outline-primary"
+                    onClick={() => handleViewOrder(transaction)}
+                  >
                     <i className="fas fa-eye"></i> View
-                  </Link>
+                  </button>
                 </td>
               </tr>
             ))
@@ -385,6 +418,13 @@ const filteredTransactions = useMemo(() => {
           </div>
         </div>
       </div>
+
+      {/* Order Details Modal - Imported from Details.js */}
+      <OrderDetailsModal 
+        show={showModal}
+        onClose={closeModal}
+        order={selectedOrder}
+      />
     </div>
   );
 }

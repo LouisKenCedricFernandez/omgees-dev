@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from './Authentication';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import omgeesLogo from './components/images/omgeesLogo.png';
-
-// Import useNavigate for navigation after login -nt
-import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 
@@ -13,13 +10,13 @@ function UserLogin() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(''); 
 
-  //to navigate after login -
+  //to navigate after login
   const { setBackendUser } = useAuth();
   const navigate = useNavigate();
 
 
-  // Handle form submission for login -nt
- const handleLogin = async (e) => {
+  // Handle form submission for login
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -29,16 +26,29 @@ function UserLogin() {
         password: password
       });
       const data = res.data;
+      
+      console.log('📡 Login response:', data); // Debug log
+      
       if (data.status === "Success") {
-        // Set backend user in context
-        setBackendUser({
+        // ✅ Include ALL user fields, especially user_id
+        const userData = {
+          user_id: data.user.user_id,      // ✅ Critical: Include user_id
+          id: data.user.id,                // ✅ Also include id as fallback
           email: data.user.email,
-          name: data.user.name,
-          type: data.user_type, // or data.user.user_type if that's what your backend returns
-          // add other fields as needed
-        });
+          fullname: data.user.fullname,    // ✅ Use fullname from backend
+          name: data.user.name,            // ✅ Also include name
+          contact: data.user.contact,      // ✅ Include contact
+          phone: data.user.phone,          // ✅ Include phone as fallback
+          address: data.user.address,      // ✅ Include address
+          type: data.user_type,
+          user_type: data.user.user_type   // ✅ Include both formats
+        };
+        
+        console.log('👤 Setting user data:', userData); // Debug log
+        
+        setBackendUser(userData);
 
-        // Now navigation will work
+        // Navigation
         if (data.user_type === "admin") {
           navigate('/admin/dashboard');
         } else if (data.user_type === "cashier") {
@@ -52,30 +62,8 @@ function UserLogin() {
         setError('Invalid email or password.');
       }
     } catch (err) {
+      console.error('❌ Login error:', err);
       setError('Server error. Please try again later.');
-    }
-  };
-
-  const fillDemo = (type) => {
-    switch(type) {
-      case 'customer':
-        setEmail('customer@example.com');
-        setPassword('password123');
-        break;
-      case 'admin':
-        setEmail('admin@example.com');
-        setPassword('admin123');
-        break;
-      case 'cashier':
-        setEmail('cashier@example.com');
-        setPassword('cashier123');
-        break;
-      case 'inventory':
-        setEmail('inventory@example.com');
-        setPassword('inventory123');
-        break;
-      default:
-        break;
     }
   };
 
@@ -85,76 +73,22 @@ function UserLogin() {
         <div className="col-12 col-sm-8 col-md-6 col-lg-4">
           <div className="card shadow-lg border-0 rounded-3" style={{ backgroundColor: 'rgba(255, 255, 255, 0.9)' }}>
             <div className="card-body p-3">
+              {/* Back to Home Button */}
+              <div className="text-start mb-2">
+                <Link 
+                  to="/home" 
+                  className="btn btn-sm btn-outline-primary rounded-pill"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  <i className="fas fa-home me-2"></i>
+                  Home
+                </Link>
+              </div>
+
               <div className="text-center mb-3">
                 <img src={omgeesLogo} alt="OMGees Logo" width="100" height="100" className="d-inline-block align-text-top me-2"/>
                 <p className="text-muted small mb-0">Welcome, please sign in</p>
               </div>
-
-              <div className="alert alert-info border-0 mb-3 py-2">
-                <h6 className="alert-heading fw-bold mb-2 small">Demo Accounts:</h6>
-                
-                <div className="row g-1">
-                  <div className="col-6">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <small className="text-truncate me-1"><strong>Customer</strong></small>
-                      <button 
-                        className="btn btn-outline-info btn-sm py-0 px-1"
-                        style={{ fontSize: '0.7rem' }}
-                        onClick={() => fillDemo('customer')}
-                      >
-                        Fill
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="col-6">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <small className="text-truncate me-1"><strong>Admin</strong></small>
-                      <button 
-                        className="btn btn-outline-info btn-sm py-0 px-1"
-                        style={{ fontSize: '0.7rem' }}
-                        onClick={() => fillDemo('admin')}
-                      >
-                        Fill
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="col-6">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <small className="text-truncate me-1"><strong>Cashier</strong></small>
-                      <button 
-                        className="btn btn-outline-success btn-sm py-0 px-1"
-                        style={{ fontSize: '0.7rem' }}
-                        onClick={() => fillDemo('cashier')}
-                      >
-                        Fill
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="col-6">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <small className="text-truncate me-1"><strong>Inventory</strong></small>
-                      <button 
-                        className="btn btn-outline-warning btn-sm py-0 px-1"
-                        style={{ fontSize: '0.7rem' }}
-                        onClick={() => fillDemo('inventory')}
-                      >
-                        Fill
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {error && (
-                <div className="alert alert-danger border-0 py-2 mb-3" role="alert">
-                  <i className="bi bi-exclamation-triangle-fill me-1"></i>
-                  <small>{error}</small>
-                </div>
-              )}
-
               <form onSubmit={handleLogin}>
                 <div className="mb-2">
                   <label htmlFor="email" className="form-label fw-semibold small">
@@ -195,6 +129,13 @@ function UserLogin() {
                     }} 
                   />
                 </div>
+
+                {error && (
+                  <div className="alert alert-danger py-2 small" role="alert">
+                    <i className="bi bi-exclamation-triangle me-1"></i>
+                    {error}
+                  </div>
+                )}
 
                 <button 
                   type="submit" 

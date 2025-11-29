@@ -1,92 +1,46 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import RestockInventory from './RestockInventory';
-import axios from 'axios';
+import React, { useState, useMemo } from 'react';
+import useInventory from '../../../components/hooks/useInventory';
+import * as XLSX from 'xlsx';
 
-const defaultInventory = []; // Empty array as default
-
-function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInitialLoad}) {
+function ManageInventory({ user }) {
   const [stockFilter, setStockFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [supplierFilter, setSupplierFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('active'); // New filter for active/archived
+  const [statusFilter, setStatusFilter] = useState('all');
   const [selectedProduct, setSelectedProduct] = useState(null);
-  
-  
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
-  const [archivingProduct, setArchivingProduct] = useState(null); // Renamed from restockingProduct
+  const [showExportConfirm, setShowExportConfirm] = useState(false);
 
-  const [inventory, setInventory] = useState(() => {
-    // Initialize with initialInventory if available, otherwise use defaultInventory
-    return initialInventory.length > 0 ? initialInventory : defaultInventory;
-  });
+  const { inventory, isLoading, error, setError } = useInventory(true); 
 
-// Fetch inventory from backend on component mount -nt
-   useEffect(() => {
-  axios.get('http://localhost:5000/inventory')
-    .then(response => {
-      console.log('Fetched inventory:', response.data);
-      if (response.data && Array.isArray(response.data)) {
-        // Normalize each product
-        const normalized = response.data.map(product => ({
-          id: product.product_id,
-          baseProductId: product.base_product_id ?? product.product_id ?? 0,
-          name: product.product_name ?? "",
-          category: product.product_category ?? "",
-          variant: product.product_variant ?? "",
-          image: product.image ?? "https://via.placeholder.com/150",
-          description: product.product_description ?? "",
-          supplier: product.product_supplier ?? "",
-          stock: product.product_totalstock ?? 0,
-          sold: product.product_totalsold ?? 0,
-          lowStockThreshold: product.lowStockThreshold ?? 10,
-          status: product.product_status ?? "Active Only",
-          price: product.product_price ?? 0,
-          lastRestocked: product.last_restocked ?? new Date().toISOString(),
-        }));
-        setInventory(normalized);
-      }
-    })
-    .catch(error => {
-      console.error('Error fetching inventory data:', error);
+  // Generate Excel File
+  const exportToExcel = () => {
+    const excelData = inventory.map(item => {
+      const stockStatus = getStockStatus(item.stock, item.lowStockThreshold);
+      return {
+        'Product ID': item.id,
+        'Product Name': item.name,
+        'Category': item.category,
+        'Variant': item.size,
+        'Price (₱)': item.price,
+        'Total Stock': item.stock,
+        'Reserved Stock': item.reserved || 0,
+        'Available Stock': (item.stock - (item.reserved || 0)),
+        'Low Stock Threshold': item.lowStockThreshold,
+        'Stock Status': stockStatus.status,
+        'Sold': item.sold,
+        'Supplier': item.supplier,
+        'Status': item.status,
+        'Last Restocked': new Date(item.lastRestocked).toLocaleDateString()
+      };
     });
-  }, []);
 
-  // Fixed useEffect to handle inventory synchronization without infinite loops
-  useEffect(() => {
-    if (initialInventory.length > 0) {
-      // Only update if the inventory has actually changed
-      const currentIds = inventory.map(item => item.id).sort().join(',');
-      const newIds = initialInventory.map(item => item.id).sort().join(',');
-      
-      if (currentIds !== newIds) {
-        setInventory(initialInventory);
-      }
-    }
-  }, [initialInventory, inventory]);
-
-  // Clean up modal states when user changes
-  useEffect(() => {
-    return () => {
-      setSelectedProduct(null);
-      setEditingProduct(null);
-      setArchivingProduct(null);
-    };
-  }, [user]);
-
-  useEffect(() => {
-  // Only run if currentInventory is empty and we have default data
-  if (initialInventory.length === 0 && defaultInventory.length > 0 && onInitialLoad) {
-    onInitialLoad(defaultInventory);
-  }
-  }, [initialInventory.length, onInitialLoad]);
-
-  const handleInventoryChange = (updatedInventory) => {
-    setInventory(updatedInventory);
-    // Call parent update function directly instead of through useEffect
-    if (onInventoryUpdate) {
-      onInventoryUpdate(updatedInventory);
-    }
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Inventory');
+    
+    const date = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(workbook, `Inventory_${date}.xlsx`);
+    setShowExportConfirm(false);
   };
   
   const formatDate = (dateString) => {
@@ -101,10 +55,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
     if (stock === 0) return { status: 'Out of Stock', color: 'danger' };
     if (stock <= threshold) return { status: 'Low Stock', color: 'warning' };
     if (stock <= threshold * 2) return { status: 'Medium Stock', color: 'info' };
-    return { status: 'In Stock', color: 'success' };
+    return { status: 'High Stock', color: 'success' };
   };
 
-  // Get unique categories and suppliers for filter dropdowns - memoized
+  // Get unique categories and suppliers for filter dropdowns
   const categories = useMemo(() => {
     return [...new Set(inventory.map(product => product.category))];
   }, [inventory]);
@@ -113,20 +67,26 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
     return [...new Set(inventory.map(product => product.supplier))];
   }, [inventory]);
 
-  // Memoized filtered products to prevent unnecessary recalculations
+  // Filtered products
   const filteredProducts = useMemo(() => {
     return inventory.filter(product => {
       const categoryMatch = categoryFilter === 'all' || product.category === categoryFilter;
       const supplierMatch = supplierFilter === 'all' || product.supplier === supplierFilter;
-      const statusMatch = statusFilter === 'all' || product.status === statusFilter;
+      
+      const stockStatus = getStockStatus(product.stock, product.lowStockThreshold);
+      const statusMatch = 
+        statusFilter === 'all' ||
+        (statusFilter === 'high-stock' && stockStatus.status === 'High Stock') ||
+        (statusFilter === 'medium-stock' && stockStatus.status === 'Medium Stock') ||
+        (statusFilter === 'low-stock' && stockStatus.status === 'Low Stock') ||
+        (statusFilter === 'out-of-stock' && stockStatus.status === 'Out of Stock');
       
       if (stockFilter === 'all') {
         return categoryMatch && supplierMatch && statusMatch;
       }
       
-      const stockStatus = getStockStatus(product.stock, product.lowStockThreshold);
       const stockLevelMatch = 
-        (stockFilter === 'normal' && stockStatus.status === 'In Stock') ||
+        (stockFilter === 'normal' && stockStatus.status === 'High Stock') ||
         (stockFilter === 'low' && (stockStatus.status === 'Low Stock' || stockStatus.status === 'Medium Stock')) ||
         (stockFilter === 'out' && stockStatus.status === 'Out of Stock');
       
@@ -138,10 +98,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
     setStockFilter('all');
     setCategoryFilter('all');
     setSupplierFilter('all');
-    setStatusFilter('active');
+    setStatusFilter('all');
   };
 
-  // Memoized product summary to prevent expensive recalculations
+  // Group products by base product
   const productSummary = useMemo(() => {
     const groupedProducts = {};
     
@@ -154,8 +114,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
           category: product.category,
           variants: [],
           totalStock: 0,
+          reservedStock: 0,
+          availableStock: 0,
           totalSold: 0,
-          overallStatus: 'In Stock',
+          overallStatus: 'High Stock',
           hasArchivedVariants: false,
           allVariantsArchived: true
         };
@@ -163,26 +125,25 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
       
       groupedProducts[key].variants.push(product);
       groupedProducts[key].totalStock += product.stock;
+      groupedProducts[key].reservedStock += (product.reserved || 0);
+      groupedProducts[key].availableStock += (product.stock - (product.reserved || 0));
       groupedProducts[key].totalSold += product.sold;
       
-      // Check for archived variants
       if (product.status === 'inactive') {
         groupedProducts[key].hasArchivedVariants = true;
       } else {
         groupedProducts[key].allVariantsArchived = false;
       }
       
-      // Product status or stock-level
       const variantStatus = getStockStatus(product.stock, product.lowStockThreshold);
       if (variantStatus.status === 'Out of Stock' || groupedProducts[key].overallStatus === 'Out of Stock') {
         groupedProducts[key].overallStatus = 'Out of Stock';
       } else if (variantStatus.status === 'Low Stock' && groupedProducts[key].overallStatus !== 'Out of Stock') {
         groupedProducts[key].overallStatus = 'Low Stock';
-      } else if (variantStatus.status === 'Medium Stock' && groupedProducts[key].overallStatus === 'In Stock') {
+      } else if (variantStatus.status === 'Medium Stock' && groupedProducts[key].overallStatus === 'High Stock') {
         groupedProducts[key].overallStatus = 'Medium Stock';
       }
       
-      // Override status if all variants are archived
       if (groupedProducts[key].allVariantsArchived) {
         groupedProducts[key].overallStatus = 'Archived';
       }
@@ -211,7 +172,7 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
           onChange={(e) => setStockFilter(e.target.value)}
         >
           <option value="all">All Stock Levels</option>
-          <option value="normal">In Stock</option>
+          <option value="normal">High Stock</option>
           <option value="low">Low/Medium Stock</option>
           <option value="out">Out of Stock</option>
         </select>
@@ -247,15 +208,17 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
         </select>
       </div>
       <div className="col-md-2">
-        <label className="form-label fw-semibold">Status</label>
+        <label className="form-label fw-semibold">Stock Status</label>
         <select 
           className="form-select"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
         >
-          <option value="all">All Products</option>
-          <option value="active">Active Only</option>
-          <option value="inactive">Archived Only</option>
+          <option value="all">All Status</option>
+          <option value="high-stock">High Stock</option>
+          <option value="medium-stock">Medium Stock</option>
+          <option value="low-stock">Low Stock</option>
+          <option value="out-of-stock">Out of Stock</option>
         </select>
       </div>
       <div className="col-md-4">
@@ -263,94 +226,12 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
           <button className="btn btn-outline-danger" onClick={resetFilters}>
             <i className="bi bi-arrow-clockwise"></i> Reset
           </button>
-          <div className="ms-auto d-flex gap-1">
-            <span className="badge bg-success">{inventory.filter(p => p.status === 'active').length} Active</span>
-            <span className="badge bg-secondary">{inventory.filter(p => p.status === 'inactive').length} Archived</span>
-          </div>
+          <button className="btn btn-outline-success" onClick={() => setShowExportConfirm(true)}>
+            <i className="fas fa-file-excel me-2"></i>Export to Excel
+          </button>
         </div>
-      </div>
+      </div>                  
     </div>
-  );
-
-  const renderTableHeader = () => (
-    <thead className="table-dark sticky-top">
-      <tr>
-        <th scope="col">Product Name</th>
-        <th scope="col" className="text-center">Category</th>
-        <th scope="col" className="text-center">Variants</th>
-        <th scope="col" className="text-center">Total Stock</th>
-        <th scope="col" className="text-center">Total Sold</th>
-        <th scope="col" className="text-center">Status</th>
-        <th scope="col" className="text-center">Actions</th>
-      </tr>
-    </thead>
-  );
-
-  const renderTableRow = (productGroup) => (
-    <tr key={`${productGroup.baseProductId}-${productGroup.name}`} 
-        className={productGroup.allVariantsArchived ? 'table-secondary' : ''}>
-      <td className="fw-semibold">
-        {productGroup.name}
-        {productGroup.hasArchivedVariants && !productGroup.allVariantsArchived && (
-          <small className="text-muted d-block">
-            <i className="fas fa-info-circle me-1"></i>Contains archived variants
-          </small>
-        )}
-      </td>
-      <td className="text-center">
-        <span className="badge bg-secondary">{productGroup.category}</span>
-      </td>
-      <td className="text-center">
-        {productGroup.variants.length}
-        {productGroup.hasArchivedVariants && (
-          <small className="text-muted d-block">
-            {productGroup.variants.filter(v => v.status === 'active').length} active
-          </small>
-        )}
-      </td>
-      <td className="text-center">{productGroup.totalStock}</td>
-      <td className="text-center">{productGroup.totalSold}</td>
-      <td className="text-center">
-        <span className={`badge bg-${getStatusColor(productGroup.overallStatus)}`}>
-          {productGroup.overallStatus}
-        </span>
-      </td>
-      <td className="text-center">
-        <div className="btn-group" role="group">
-          <button 
-            className="btn btn-sm btn-outline-primary"
-            onClick={() => setSelectedProduct(productGroup)}
-            title="View Details"
-          >
-            <i className="fas fa-eye"></i>
-          </button>
-          <button 
-            className="btn btn-sm btn-outline-danger"
-            onClick={() => setArchivingProduct(productGroup.variants[0])}
-            title="Archive/Restore"
-          >
-            <i className="fas fa-archive"></i>
-          </button>
-          <button 
-            className="btn btn-sm btn-outline-warning"
-            onClick={() => setEditingProduct(productGroup.variants[0])}
-            title="Edit Product"
-          >
-            <i className="fas fa-edit"></i>
-          </button>
-        </div>
-      </td>
-    </tr>
-  );
-
-  const renderEmptyState = () => (
-    <tr>
-      <td colSpan="7" className="text-center py-5 text-muted">
-        <i className="bi bi-inbox fs-1 d-block mb-3"></i>
-        <h5>No products found</h5>
-        <p>Try adjusting your filters</p>
-      </td>
-    </tr>
   );
 
   const ProductDetailsModal = () => {
@@ -361,7 +242,10 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
         <div className="modal-dialog modal-xl">
           <div className="modal-content">
             <div className="modal-header">
-              <h5 className="modal-title">Product Details - {selectedProduct.name}</h5>
+              <h5 className="modal-title">
+                <i className="fas fa-box me-2"></i>
+                Product Details - {selectedProduct.name}
+              </h5>
               <button 
                 type="button" 
                 className="btn-close" 
@@ -369,87 +253,101 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
               ></button>
             </div>
             <div className="modal-body">
+              {/* Product Overview */}
               <div className="row mb-4">
                 <div className="col-md-4">
                   <img 
                     src={selectedProduct.variants[0].image} 
-                    className="img-fluid rounded" 
+                    className="img-fluid rounded shadow-sm" 
                     alt={selectedProduct.name}
                     style={{width: '100%', height: '200px', objectFit: 'cover'}}
                   />
                 </div>
                 <div className="col-md-8">
-                  <h6>Product Information</h6>
-                  <table className="table table-sm">
-                    <tbody>
-                      <tr>
-                        <td><strong>Base Product ID:</strong></td>
-                        <td>#{selectedProduct.baseProductId.toString().padStart(3, '0')}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Category:</strong></td>
-                        <td><span className="badge bg-secondary">{selectedProduct.category}</span></td>
-                      </tr>
-                      <tr>
-                        <td><strong>Supplier:</strong></td>
-                        <td>{selectedProduct.variants[0].supplier}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Total Variants:</strong></td>
-                        <td>{selectedProduct.variants.length}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Active Variants:</strong></td>
-                        <td>{selectedProduct.variants.filter(v => v.status === 'active').length}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Overall Status:</strong></td>
-                        <td>
-                          <span className={`badge bg-${getStatusColor(selectedProduct.overallStatus)}`}>
-                            {selectedProduct.overallStatus}
-                          </span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <h6 className="text-muted mb-3">PRODUCT INFORMATION</h6>
+                  <div className="row g-3">
+                    <div className="col-6">
+                      <small className="text-muted d-block">Base Product ID</small>
+                      <strong>#{selectedProduct.baseProductId.toString().padStart(3, '0')}</strong>
+                    </div>
+                    <div className="col-6">
+                      <small className="text-muted d-block">Category</small>
+                      <span className="badge bg-secondary">{selectedProduct.category}</span>
+                    </div>
+                    <div className="col-6">
+                      <small className="text-muted d-block">Supplier</small>
+                      <strong>{selectedProduct.variants[0].supplier}</strong>
+                    </div>
+                    <div className="col-6">
+                      <small className="text-muted d-block">Overall Status</small>
+                      <span className={`badge bg-${getStatusColor(selectedProduct.overallStatus)}`}>
+                        {selectedProduct.overallStatus}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <hr className="my-3" />
+                  
+                  <div className="row g-3">
+                    <div className="col-4 text-center">
+                      <small className="text-muted d-block">Total Stock</small>
+                      <h4 className="mb-0">{selectedProduct.totalStock}</h4>
+                    </div>
+                    <div className="col-4 text-center">
+                      <small className="text-muted d-block">Reserved</small>
+                      <h4 className="mb-0 text-warning">{selectedProduct.reservedStock}</h4>
+                    </div>
+                    <div className="col-4 text-center">
+                      <small className="text-muted d-block">Available</small>
+                      <h4 className="mb-0 text-success">{selectedProduct.availableStock}</h4>
+                    </div>
+                  </div>
                 </div>
               </div>
 
+              {/* Description */}
               <div className="row mb-4">
                 <div className="col-12">
-                  <h6>Description</h6>
-                  <p className="text-muted">{selectedProduct.variants[0].description}</p>
+                  <h6 className="text-muted">DESCRIPTION</h6>
+                  <p className="text-muted">{selectedProduct.variants[0].description || 'No description available'}</p>
                 </div>
               </div>
 
+              {/* Variants Table */}
               <div className="row">
                 <div className="col-12">
-                  <h6>Product Variants</h6>
+                  <h6 className="text-muted mb-3">PRODUCT VARIANTS ({selectedProduct.variants.length})</h6>
                   <div className="table-responsive">
                     <table className="table table-striped table-sm">
-                      <thead>
+                      <thead className="table-dark">
                         <tr>
-                          <th>Product ID</th>
+                          <th>ID</th>
                           <th>Variant</th>
                           <th>Price</th>
-                          <th>Stock</th>
-                          <th>Low Stock Threshold</th>
+                          <th>Total Stock</th>
+                          <th>Reserved</th>
+                          <th>Available</th>
+                          <th>Low Stock Alert</th>
                           <th>Sold</th>
                           <th>Last Restocked</th>
                           <th>Status</th>
-                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {selectedProduct.variants.map((variant) => {
                           const stockStatus = getStockStatus(variant.stock, variant.lowStockThreshold);
                           const isArchived = variant.status === 'inactive';
+                          const reserved = variant.reserved || 0;
+                          const available = variant.stock - reserved;
+                          
                           return (
                             <tr key={variant.id} className={isArchived ? 'table-secondary' : ''}>
                               <td><strong>#{variant.id}</strong></td>
                               <td><strong>{variant.size}</strong></td>
                               <td>₱{variant.price.toLocaleString()}</td>
                               <td>{variant.stock}</td>
+                              <td className="text-warning">{reserved}</td>
+                              <td className="text-success"><strong>{available}</strong></td>
                               <td>{variant.lowStockThreshold}</td>
                               <td>{variant.sold}</td>
                               <td>{formatDate(variant.lastRestocked)}</td>
@@ -463,44 +361,19 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
                                   </span>
                                 </div>
                               </td>
-                              <td>
-                                <div className="btn-group" role="group">
-                                  <button 
-                                    className="btn btn-xs btn-outline-danger"
-                                    onClick={() => {
-                                      setArchivingProduct(variant);
-                                      setSelectedProduct(null);
-                                    }}
-                                    title="Archive/Restore"
-                                  >
-                                    <i className="fas fa-archive"></i>
-                                  </button>
-                                  <button 
-                                    className="btn btn-xs btn-outline-primary"
-                                    onClick={() => {
-                                      setEditingProduct(variant);
-                                      setSelectedProduct(null);
-                                    }}
-                                    title="Edit"
-                                  >
-                                    <i className="fas fa-edit"></i>
-                                  </button>
-                                </div>
-                              </td>
                             </tr>
                           );
                         })}
                       </tbody>
-                      <tfoot>
-                        <tr className="table-secondary">
-                          <td colSpan="2"><strong>Total</strong></td>
-                          <td>-</td>
+                      <tfoot className="table-secondary">
+                        <tr>
+                          <td colSpan="3"><strong>TOTALS</strong></td>
                           <td><strong>{selectedProduct.totalStock}</strong></td>
+                          <td className="text-warning"><strong>{selectedProduct.reservedStock}</strong></td>
+                          <td className="text-success"><strong>{selectedProduct.availableStock}</strong></td>
                           <td>-</td>
                           <td><strong>{selectedProduct.totalSold}</strong></td>
-                          <td>-</td>
-                          <td>-</td>
-                          <td>-</td>
+                          <td colSpan="2">-</td>
                         </tr>
                       </tfoot>
                     </table>
@@ -520,63 +393,161 @@ function ManageInventory({user, onInventoryUpdate, initialInventory = [], onInit
   };
 
   return (
-    <div className="container-fluid bg-light min-vh-100">
-      <div className="container py-5">
-        <div className="row">
-          <div className="col-12">
-            <div className="card border-0 shadow-sm">
-              
-              {/* Inventory Header */}
-              <div className="card-header bg-white border-0 pb-4">
-                <div className="d-flex justify-content-between align-items-center mb-3">
-                  <h2 className="mb-0">Inventory Management</h2>
-                  <div className="d-flex gap-2 align-items-center">
-                    <span className="badge bg-primary">{productSummary.length} product groups</span>
-                    <span className="badge bg-info">{filteredProducts.length} total variants</span>
-                    <button className="btn btn-success btn-sm" onClick={() => setShowAddModal(true)}>
-                      <i className="fas fa-plus me-1"></i>Add Product
-                    </button>
-                  </div>
-                </div>
-                {renderFilters()}
-                
-              </div>
-              
-              {/* Inventory Body - Table */}
-              <div className="card-body p-0 mt-3">
-                <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
-                  <table className="table table-hover mb-0">
-                    {renderTableHeader()}
-                    <tbody>
-                      {productSummary.length > 0 
-                        ? productSummary.map(renderTableRow)
-                        : renderEmptyState()
-                      }
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              
+    <>
+      {isLoading && (
+        <div className="position-fixed top-0 end-0 m-3" style={{ zIndex: 9999 }}>
+          <div className="alert alert-info shadow-sm" role="alert">
+            <div className="d-flex align-items-center">
+              <div className="spinner-border spinner-border-sm me-2" role="status"></div>
+              <strong>Loading inventory...</strong>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* For Product Details to show */}
-      <ProductDetailsModal />
+      {error && (
+        <div className="position-fixed top-0 end-0 m-3" style={{ zIndex: 9999 }}>
+          <div className="alert alert-danger shadow-sm" role="alert">
+            <i className="fas fa-exclamation-circle me-2"></i>
+            <strong>Error:</strong> {error}
+            <button type="button" className="btn-close" onClick={() => setError(null)}></button>
+          </div>
+        </div>
+      )}
       
-      {/* Archive Modal (formerly RestockInventory) */}
-      <RestockInventory 
-        inventory={inventory}
-        setInventory={handleInventoryChange}
-        showAddModal={showAddModal}
-        setShowAddModal={setShowAddModal}
-        editingProduct={editingProduct}
-        setEditingProduct={setEditingProduct}
-        selectedProduct={archivingProduct}
-        setSelectedProduct={setArchivingProduct}
-      />
-    </div>
+      <div className="container-fluid bg-light min-vh-100">
+        <div className="container py-5">
+          <div className="row">
+            <div className="col-12">
+              <div className="card border-0 shadow-sm">
+                
+                {/* Header */}
+                <div className="card-header bg-white border-0 pb-4">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <h2 className="mb-0">
+                      <i className="fas fa-boxes me-2"></i>
+                      Inventory Overview
+                    </h2>
+                    <span className="badge bg-primary fs-6">
+                      {productSummary.length} Products
+                    </span>
+                  </div>
+                  {renderFilters()}
+                </div>
+                
+                {/* Table */}
+                <div className="card-body p-0 mt-3">
+                  <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
+                    <table className="table table-hover mb-0">
+                      <thead className="table-dark sticky-top">
+                        <tr>
+                          <th scope="col">Product Name</th>
+                          <th scope="col" className="text-center">Category</th>
+                          <th scope="col" className="text-center">Variants</th>
+                          <th scope="col" className="text-center">Total Stock</th>
+                          <th scope="col" className="text-center">Reserved</th>
+                          <th scope="col" className="text-center">Available</th>
+                          <th scope="col" className="text-center">Total Sold</th>
+                          <th scope="col" className="text-center">Status</th>
+                          <th scope="col" className="text-center">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {productSummary.length > 0 ? (
+                          productSummary.map((productGroup) => (
+                            <tr key={`${productGroup.baseProductId}-${productGroup.name}`} 
+                                className={productGroup.allVariantsArchived ? 'table-secondary' : ''}>
+                              <td className="fw-semibold">
+                                {productGroup.name}
+                                {productGroup.hasArchivedVariants && !productGroup.allVariantsArchived && (
+                                  <small className="text-muted d-block">
+                                    <i className="fas fa-info-circle me-1"></i>Has archived variants
+                                  </small>
+                                )}
+                              </td>
+                              <td className="text-center">{productGroup.category}</td>
+                              <td className="text-center">
+                                {productGroup.variants.length}
+                                {productGroup.hasArchivedVariants && (
+                                  <small className="text-muted d-block">
+                                    {productGroup.variants.filter(v => v.status === 'active').length} active
+                                  </small>
+                                )}
+                              </td>
+                              <td className="text-center"><strong>{productGroup.totalStock}</strong></td>
+                              <td className="text-center text-warning"><strong>{productGroup.reservedStock}</strong></td>
+                              <td className="text-center text-success"><strong>{productGroup.availableStock}</strong></td>
+                              <td className="text-center">{productGroup.totalSold}</td>
+                              <td className="text-center">
+                                <span className={`badge bg-${getStatusColor(productGroup.overallStatus)}`}>
+                                  {productGroup.overallStatus}
+                                </span>
+                              </td>
+                              <td className="text-center">
+                                <button 
+                                  className="btn btn-sm btn-outline-primary"
+                                  onClick={() => setSelectedProduct(productGroup)}
+                                  title="View Details"
+                                >
+                                  <i className="fas fa-eye"></i> View
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="9" className="text-center py-5 text-muted">
+                              <i className="bi bi-inbox fs-1 d-block mb-3"></i>
+                              <h5>No products found</h5>
+                              <p>Try adjusting your filters</p>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <ProductDetailsModal />
+        
+        {/* Export Modal */}
+        {showExportConfirm && (
+          <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+            <div className="modal-dialog modal-dialog-centered">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <h5 className="modal-title">
+                    <i className="fas fa-file-excel text-success me-2"></i>
+                    Export Inventory
+                  </h5>
+                  <button type="button" className="btn-close" onClick={() => setShowExportConfirm(false)}></button>
+                </div>
+                <div className="modal-body">
+                  <p>Export <strong>{inventory.length} products</strong> to Excel?</p>
+                  <p className="text-muted small">
+                    <i className="fas fa-info-circle me-1"></i>
+                    Includes product details, stock levels, reserved stock, and status.
+                  </p>
+                </div>
+                <div className="modal-footer">
+                  <button className="btn btn-secondary" onClick={() => setShowExportConfirm(false)}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-success" onClick={exportToExcel}>
+                    <i className="fas fa-download me-2"></i>Export
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

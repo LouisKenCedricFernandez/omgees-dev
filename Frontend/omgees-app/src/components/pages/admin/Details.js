@@ -1,150 +1,319 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router';
+import React from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
+const OrderDetailsModal = ({ show, onClose, order }) => {
+  if (!order) return null;
 
-const Details = () => {
-  // Sample data - you can replace this with props or API data
-  const [invoiceData] = useState({
-    invoiceNumber: 'INV-2024-001',
-    customerName: 'Arancist',
-    transactionDate: '2024-08-27',
-    items: [
-      { id: 1, name: 'Product A', quantity: 2, price: 2500.00 },
-      { id: 2, name: 'Product B', quantity: 1, price: 3750.00 },
-      { id: 3, name: 'Product C', quantity: 3, price: 1500.00 },
-    ],
-    discount: 500.00,
-    amountReceived: 12500.00
-  });
+  const API_HOST = 'http://localhost:5000';
 
-  // Calculate totals
-  const calculateItemTotal = (quantity, price) => {
-    return (quantity * price).toFixed(2);
+  const getImageSrc = (img) => {
+    if (!img) return null;
+    if (typeof img === 'string' && img.startsWith('http')) return img;
+    return `${API_HOST}${img}`;
   };
 
-  const calculateSubTotal = () => {
-    return invoiceData.items.reduce((acc, item) => {
-      return acc + (item.quantity * item.price);
-    }, 0).toFixed(2);
+  const ensureItemsArray = (items) => {
+    if (!items) return [];
+    if (Array.isArray(items)) return items;
+    if (typeof items === 'string') {
+      try {
+        const parsed = JSON.parse(items);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object') return [parsed];
+        return [];
+      } catch (e) {
+        try {
+          return items.split(',').map(s => s.trim()).filter(Boolean);
+        } catch (_) {
+          return [];
+        }
+      }
+    }
+    if (typeof items === 'object') return [items];
+    return [];
   };
 
-  const calculateAmountDue = () => {
-    const subTotal = parseFloat(calculateSubTotal());
-    const discount = invoiceData.discount || 0;
-    return (subTotal - discount).toFixed(2);
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      'pending': { bg: 'warning', text: 'Pending' },
+      'ready': { bg: 'success', text: 'Ready' },
+      'completed': { bg: 'primary', text: 'Completed' },
+      'cancelled': { bg: 'danger', text: 'Cancelled' }
+    };
+    const config = statusConfig[status?.toLowerCase()] || { bg: 'secondary', text: status };
+    return <span className={`badge bg-${config.bg}`}>{config.text}</span>;
   };
 
-  const calculateChange = () => {
-    const amountDue = parseFloat(calculateAmountDue());
-    const amountReceived = invoiceData.amountReceived || 0;
-    return (amountReceived - amountDue).toFixed(2);
+  const formatDate = (timestamp) => {
+    return new Date(timestamp).toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
   };
+
+  const items = ensureItemsArray(order.items);
+  const customer = typeof order.customer === 'string' 
+    ? { name: order.customer }
+    : order.customer || {};
+  const shipping = order.shipping || {};
+  const payment = order.payment || {};
 
   return (
-    <div className="container-fluid bg-light min-vh-100">
-      <div className="container py-5">
-        <div className="row">
-          <div className="col-12">
-            <div className="d-flex justify-content-between align-items-center mb-4">
-              <Link to="/admin/logs" className="btn btn-outline-primary">
-                <i className="bi bi-arrow-left"></i> Back
-              </Link>
-              <h2 className="mb-0">Invoice Details</h2>
-              <div></div> {/* Empty div for spacing */}
+    <>
+      {/* Modal Backdrop */}
+      {show && (
+        <div 
+          className="modal-backdrop fade show" 
+          style={{ zIndex: 1040 }}
+          onClick={onClose}
+        ></div>
+      )}
+      
+      {/* Modal */}
+      <div 
+        className={`modal fade ${show ? 'show d-block' : ''}`} 
+        tabIndex="-1" 
+        style={{ zIndex: 1050 }}
+      >
+        <div className="modal-dialog modal-lg modal-dialog-scrollable">
+          <div className="modal-content">
+            {/* Modal Header */}
+            <div className="modal-header">
+              <h5 className="modal-title">Order Details - {order.order_id || order.orderId}</h5>
+              <button 
+                type="button" 
+                className="btn-close" 
+                onClick={onClose}
+              ></button>
             </div>
-            
-            <div className="row">
-              {/*Invoice Items Table*/}
-              <div className="col-lg-8 col-md-7 mb-4">
-                <div className="card h-100 border-0 shadow-sm">
-                  <div className="card-header bg-primary text-white">
-                    <h5 className="mb-0">Invoice #{invoiceData.invoiceNumber}</h5>
-                  </div>
-                  <div className="card-body">
-                    <div className="table-responsive">
-                      <table className="table table-bordered table-hover">
-                        <thead className="table-light">
-                          <tr>
-                            <th scope="col" className="text-start">#</th>
-                            <th scope="col" className="text-start">Item Name</th>
-                            <th scope="col" className="text-start">Quantity</th>
-                            <th scope="col" className="text-start">Price</th>
-                            <th scope="col" className="text-start">Total Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {invoiceData.items.map((item, index) => (
-                            <tr key={item.id}>
-                              <th scope="row">{index + 1}</th>
-                              <td>{item.name}</td>
-                              <td className="text-center">{item.quantity}</td>
-                              <td className="text-end">₱{item.price.toFixed(2)}</td>
-                              <td className="text-end fw-bold">
-                                ₱{calculateItemTotal(item.quantity, item.price)}
+
+            {/* Modal Body */}
+            <div className="modal-body">
+              {/* Order and Customer Information Row */}
+              <div className="row mb-3">
+                <div className="col-md-6">
+                  <h6>Order Information</h6>
+                  <table className="table table-sm">
+                    <tbody>
+                      <tr>
+                        <td><strong>Order ID:</strong></td>
+                        <td>{order.order_id || order.orderId}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Type:</strong></td>
+                        <td>
+                          <span className={`badge ${order.type === 'online' ? 'bg-info' : 'bg-success'}`}>
+                            {order.type === 'online' ? 'Online' : 'In-Store'}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td><strong>Date:</strong></td>
+                        <td>{formatDate(order.date || order.timestamp)}</td>
+                      </tr>
+                      <tr>
+                        <td><strong>Status:</strong></td>
+                        <td>{getStatusBadge(order.status)}</td>
+                      </tr>
+                      {order.cashierName && (
+                        <tr>
+                          <td><strong>Cashier:</strong></td>
+                          <td>{order.cashierName}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="col-md-6">
+                  <h6>Customer Information</h6>
+                  <table className="table table-sm">
+                    <tbody>
+                      <tr>
+                        <td><strong>Name:</strong></td>
+                        <td>{customer.name || customer.username || 'N/A'}</td>
+                      </tr>
+                      {customer.email && (
+                        <tr>
+                          <td><strong>Email:</strong></td>
+                          <td className="text-break">{customer.email}</td>
+                        </tr>
+                      )}
+                      {(customer.phone || customer.contact) && (
+                        <tr>
+                          <td><strong>Phone:</strong></td>
+                          <td>{customer.phone || customer.contact}</td>
+                        </tr>
+                      )}
+                      {customer.address && (
+                        <tr>
+                          <td><strong>Address:</strong></td>
+                          <td style={{maxWidth: '200px', wordBreak: 'break-word'}}>{customer.address}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Order Items */}
+              <div className="row mb-3">
+                <div className="col-12">
+                  <h6>Order Items</h6>
+                  <div className="table-responsive">
+                    <table className="table table-striped table-sm">
+                      <thead>
+                        <tr>
+                          <th>Product</th>
+                          <th>Price</th>
+                          <th>Quantity</th>
+                          <th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.length > 0 ? (
+                          items.map((item, index) => (
+                            <tr key={item.id || index}>
+                              <td>
+                                {item.product_name || item.name}
+                                {item.selectedVariant && (
+                                  <div className="text-muted small">
+                                    Variant: {item.selectedVariant.name}
+                                  </div>
+                                )}
                               </td>
+                              <td>₱{Number(item.price || 0).toLocaleString()}</td>
+                              <td>{Number(item.quantity || 0)}</td>
+                              <td>₱{(Number(item.price || 0) * Number(item.quantity || 0)).toLocaleString()}</td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="4" className="text-center text-muted">No items found</td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        {shipping.fee && shipping.fee > 0 && (
+                          <tr>
+                            <td colSpan="3"><strong>Shipping:</strong></td>
+                            <td>₱{Number(shipping.fee).toLocaleString()}</td>
+                          </tr>
+                        )}
+                        <tr>
+                          <td colSpan="3"><strong>Total:</strong></td>
+                          <td><strong>₱{Number(order.total || 0).toLocaleString()}</strong></td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
                 </div>
               </div>
 
-              {/*Transaction Details Card*/}
-              <div className="col-lg-4 col-md-5 mb-4">
-                <div className="card h-100 border-0 shadow-sm">
-                  <div className="card-header bg-success text-white">
-                    <h5 className="mb-0">Transaction Details</h5>
-                  </div>
-                  <div className="card-body">
-                      <table className="table table-borderless table-sm mb-0">
-                      <tbody>
-                          <tr>
-                          <td className="fw-bold">Customer Name:</td>
-                          <td>{invoiceData.customerName}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Date of Transaction:</td>
-                          <td>{invoiceData.transactionDate}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Sub Total:</td>
-                          <td>₱{calculateSubTotal()}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Discount:</td>
-                          <td>{invoiceData.discount ? `₱${invoiceData.discount.toFixed(2)}` : '-'}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Amount Due:</td>
-                          <td>₱{calculateAmountDue()}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Amount Received:</td>
-                          <td>₱{invoiceData.amountReceived.toFixed(2)}</td>
-                          </tr>
-                          <tr>
-                          <td className="fw-bold">Change:</td>
-                          <td className={parseFloat(calculateChange()) >= 0 ? 'text-success' : 'text-danger'}>
-                              ₱{calculateChange()}
-                          </td>
-                          </tr>
-                      </tbody>
-                      </table>
-                  </div>
-                  <div className="card-footer text-muted text-center bg-light border-0">
-                    <small>Generated on {new Date().toLocaleDateString()}</small>
+              {/* Shipping Information */}
+              {shipping && (shipping.name || shipping.method) && (
+                <div className="row mb-3">
+                  <div className="col-12">
+                    <h6>Shipping Information</h6>
+                    <p><strong>Method:</strong> {
+                      shipping.name || 
+                      (shipping.method === 'customer_delivery' ? 'Customer Arranged Delivery' : 
+                       shipping.method === 'pickup' ? 'Store Pickup' : shipping.method)
+                    }</p>
+                    {shipping.estimatedDays && (
+                      <p><strong>Estimated:</strong> {shipping.estimatedDays}</p>
+                    )}
                   </div>
                 </div>
+              )}
+
+              {/* Payment Information */}
+              <div className="row mb-3">
+                <div className="col-12">
+                  <h6>Payment Information</h6>
+                  <p>
+                    <strong>Method:</strong>{" "}
+                    <span className="badge bg-secondary">
+                      {(payment.method || order.payment_method || 'cash').toUpperCase()}
+                    </span>
+                  </p>
+                  
+                  {/* Payment Proof Display */}
+                  {(order.paymentProof || order.payment_proof) ? (
+                    <div className="mt-3">
+                      <strong className="d-block mb-2">
+                        <i className="fas fa-receipt me-2"></i>Payment Proof:
+                      </strong>
+                      <div className="card border">
+                        <div className="card-body p-3">
+                          <div className="text-center mb-2">
+                            <img 
+                              src={getImageSrc(order.paymentProof || order.payment_proof)} 
+                              alt="Payment proof" 
+                              className="img-fluid rounded border shadow-sm"
+                              style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                              onError={(e) => {
+                                e.currentTarget.src = 'https://via.placeholder.com/400x300?text=Image+Not+Found';
+                              }}
+                            />
+                          </div>
+                          <div className="d-flex gap-2 justify-content-center">
+                            <a 
+                              href={getImageSrc(order.paymentProof || order.payment_proof)} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="btn btn-sm btn-primary"
+                            >
+                              <i className="fas fa-external-link-alt me-1"></i>
+                              View Full Size
+                            </a>
+                          </div>
+                          {(payment.referenceNumber || order.payment_reference) && (
+                            <p className="mt-2 mb-0">
+                              <strong>Reference Number:</strong>{" "}
+                              <code className="bg-light p-2 rounded">
+                                {payment.referenceNumber || order.payment_reference}
+                              </code>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="alert alert-info mt-2 mb-0">
+                      <i className="fas fa-info-circle me-2"></i>
+                      No payment proof uploaded
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Order Notes */}
+              {order.notes && (
+                <div className="row">
+                  <div className="col-12">
+                    <h6>Order Notes</h6>
+                    <p className="text-muted">{order.notes}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="modal-footer">
+              <button 
+                type="button" 
+                className="btn btn-secondary btn-sm" 
+                onClick={onClose}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
-export default Details;
+export default OrderDetailsModal;

@@ -11,7 +11,30 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState(null);
+  // Load current user from localStorage so auth persists across refreshes
+  const [currentUserState, setCurrentUserState] = useState(() => {
+    try {
+      const raw = localStorage.getItem('omgees_currentUser');
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn('Failed to parse stored currentUser', e);
+      return null;
+    }
+  });
+
+  // Wrapper to keep state and localStorage in sync
+  const setCurrentUser = (user) => {
+    setCurrentUserState(user);
+    try {
+      if (user) {
+        localStorage.setItem('omgees_currentUser', JSON.stringify(user));
+      } else {
+        localStorage.removeItem('omgees_currentUser');
+      }
+    } catch (e) {
+      console.warn('Failed to persist currentUser to localStorage', e);
+    }
+  };
 
   // Demo users for the application
   const [users, setUsers] = useState({
@@ -85,7 +108,8 @@ export const AuthProvider = ({ children }) => {
     }));
     
     // If this is the current user, also update currentUser state
-    if (currentUser && currentUser.email === email) {
+    if (currentUserState && currentUserState.email === email) {
+      // keep persisted user in sync
       setCurrentUser(updatedUser);
     }
   };
@@ -152,20 +176,21 @@ export const AuthProvider = ({ children }) => {
 
   // Backend user setter -nt
     const setBackendUser = (user) => {
-  setCurrentUser(user);
-};
+    // Called by backend login flow to set the authenticated user
+    setCurrentUser(user);
+  };
   // Add these to your value object:
   const value = {
-    currentUser,
+    currentUser: currentUserState,
     login,
     register, // Added register to the context value
     logout,
     setBackendUser,// Added setter for backend user -nt
-    isAuthenticated: !!currentUser,
-    isAdmin: currentUser?.type === 'admin',
-    isCashier: currentUser?.type === 'cashier',
-    isInventoryManager: currentUser?.type === 'inventory_manager',
-    isCustomer: currentUser?.type === 'customer',
+    isAuthenticated: !!currentUserState,
+    isAdmin: currentUserState?.type === 'admin',
+    isCashier: currentUserState?.type === 'cashier',
+    isInventoryManager: currentUserState?.type === 'inventory_manager',
+    isCustomer: currentUserState?.type === 'customer',
     users: getAllUsers(),
     addUser,
     updateUser,

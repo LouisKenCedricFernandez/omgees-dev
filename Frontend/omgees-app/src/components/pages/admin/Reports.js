@@ -1,226 +1,130 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import axios from 'axios';
+import * as XLSX from 'xlsx';
 
 function Reports() {
-  const [transactions, setTransactions] = useState([]);
-  const [inventory, setInventory] = useState([]);
+  const [completedOrders, setCompletedOrders] = useState([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [movementFilter, setMovementFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
-  const [showExportModal, setShowExportModal] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [showExportConfirm, setShowExportConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
-  // Fetch transactions and inventory from backend
-  useEffect(() => {
-  setLoading(true);
-  Promise.all([
-    axios.get('http://localhost:5000/manage-orders'), // <-- fixed endpoint!
-    axios.get('http://localhost:5000/inventory')
-  ])
-    .then(([transactionsRes, inventoryRes]) => {
-      setTransactions(transactionsRes.data);
-      setInventory(inventoryRes.data);
-      setLoading(false);
-    })
-    .catch(error => {
-      console.error('Error fetching data:', error);
-      setLoading(false);
-    });
-}, []);
 
-  // Calculate product sales and movement from real transaction data
-  const productAnalysis = useMemo(() => {
-    console.log('Analyzing transactions:', transactions.length);
-    console.log('Inventory structure:', inventory.length);
-    
-    // Get completed transactions within date range
-    const filteredTransactions = transactions.filter(transaction => {
-      if (transaction.status !== 'completed') return false;
-      
-      const transactionDate = new Date(transaction.timestamp);
+  // Fetch completed orders from backend
+  useEffect(() => {
+    setLoading(true);
+    fetch('http://localhost:5000/reports')
+      .then(res => res.json())
+      .then(data => {
+        console.log('📊 Received reports data:', data);
+        setCompletedOrders(data);
+        setLoading(false);
+      })
+      .catch(error => {
+        console.error('Error fetching reports:', error);
+        setLoading(false);
+      });
+  }, []);
+
+  // Filter orders based on date range and type
+  const filteredOrders = useMemo(() => {
+    return completedOrders.filter(order => {
+      const orderDate = new Date(order.date || order.timestamp);
       const start = startDate ? new Date(startDate) : null;
       const end = endDate ? new Date(endDate) : null;
       
-      return (!start || transactionDate >= start) && (!end || transactionDate <= end);
+      const dateInRange = (!start || orderDate >= start) && (!end || orderDate <= end);
+      const typeMatch = typeFilter === 'all' || order.type === typeFilter;
+      
+      return dateInRange && typeMatch;
     });
+  }, [completedOrders, startDate, endDate, typeFilter]);
 
-    console.log('Filtered transactions:', filteredTransactions.length);
+  // Calculate product-level analytics
+  const productAnalytics = useMemo(() => {
+    const productMap = {};
 
-    // Create a lookup map for inventory variants
-    const variantLookup = {};
-    inventory.forEach(product => {
-      if (product.variants && Array.isArray(product.variants)) {
-        product.variants.forEach(variant => {
-          variantLookup[variant.id] = {
-            ...variant,
-            productName: product.product_name || product.name,
-            category: product.product_category || product.category,
-            supplier: product.product_supplier || product.supplier
-          };
-        });
-      } else {
-        // Treat product itself as a variant
-        variantLookup[product.product_id || product.id] = {
-          id: product.product_id || product.id,
-          productName: product.product_name || product.name,
-          category: product.product_category || product.category,
-          supplier: product.product_supplier || product.supplier,
-          size: product.product_variant || product.size,
-          stock: product.product_totalstock || product.stock,
-          status: product.product_status || product.status,
-          lowStockThreshold: product.lowStockThreshold || 0
-        };
-      }
-    });
-
-    inventory.forEach(product => {
-  if (product.variants) {
-    product.variants.forEach(variant => {
-      // ...
-    });
-  }
-});
-
-    console.log('Variant lookup created:', Object.keys(variantLookup).length);
-
-    // Aggregate sales data by variant
-    const variantSales = {};
-    
-    filteredTransactions.forEach(transaction => {
-      let items = transaction.items;
-      if (typeof items === "string") {
-        try {
-          items = JSON.parse(items);
-        } catch (e) {
-          items = [];
-        }
-      }
-      if (!Array.isArray(items)) items = [];
-      items.forEach(item => {
-        // Handle different item structures
-        let variantId;
-        let itemName;
-        let itemSize;
-        let itemCategory;
+    filteredOrders.forEach(order => {
+      (order.items || []).forEach(item => {
+        const productId = item.product_id || item.id;
+        const productName = item.product_name || item.name;
+        const quantity = parseInt(item.quantity) || 0;
+        const subtotal = parseFloat(item.subtotal) || 0;
         
-        if (item.selectedVariant) {
-          // Customer orders with selected variants
-          variantId = item.selectedVariant.id || item.selectedVariant.product_id;
-          itemName = item.name;
-          itemSize = item.selectedVariant.size || item.selectedVariant.product_variant;
-        } else {
-          // Cashier orders or direct items
-          variantId = item.id || item.product_id;
-          itemName = item.displayName || item.name || item.product_name;
-          itemSize = item.size || item.product_variant;
-        }
-        
-        // Look up variant details from inventory
-        const variantDetails = variantLookup[variantId];
-        if (variantDetails) {
-          itemCategory = variantDetails.category;
-          itemName = variantDetails.productName;
-          itemSize = variantDetails.size;
-        } else {
-          itemCategory = item.category || 'Unknown';
+        // Parse variant from JSON string if needed
+        let variant = item.selectedVariant;
+        if (typeof variant === 'string') {
+          try {
+            variant = JSON.parse(variant);
+          } catch (e) {
+            console.log('Could not parse variant:', variant);
+            variant = null;
+          }
         }
 
-        const productKey = `${variantId}`;
-        
-        if (!variantSales[productKey]) {
-          variantSales[productKey] = {
-            id: variantId,
-            name: itemName,
-            size: itemSize,
-            category: itemCategory,
-            qtySold: 0,
+        // Extract variant name/size from the parsed object
+        const variantName = variant?.size || variant?.name || variant?.variant || 'Standard';
+
+        const key = `${productId}-${variantName}`;
+
+        if (!productMap[key]) {
+          productMap[key] = {
+            productId: productId,
+            productName: productName,
+            variantName: variantName,
+            variant: variant,
+            totalQuantitySold: 0,
             totalRevenue: 0,
-            avgPrice: 0,
-            transactions: 0
+            orderCount: 0,
+            orders: []
           };
         }
-        
-        variantSales[productKey].qtySold += item.quantity;
-        variantSales[productKey].totalRevenue += item.price * item.quantity;
-        variantSales[productKey].transactions += 1;
-        variantSales[productKey].avgPrice = variantSales[productKey].totalRevenue / variantSales[productKey].qtySold;
+
+        productMap[key].totalQuantitySold += quantity;
+        productMap[key].totalRevenue += subtotal;
+        productMap[key].orderCount += 1;
+        productMap[key].orders.push({
+          orderNumber: order.order_number,
+          date: order.date,
+          quantity: quantity,
+          subtotal: subtotal
+        });
       });
     });
 
-    console.log('Variant sales calculated:', Object.keys(variantSales).length);
-
-    // Add movement classification and current inventory data
-    const productsWithMovement = Object.values(variantSales).map(product => {
-      // Find current inventory status
-      const currentVariant = variantLookup[product.id];
-      
-      // Classify movement based on quantity sold
-      let movement = 'Non-moving';
-      let movementColor = 'danger';
-      
-      if (product.qtySold >= 50) {
-        movement = 'Fast-moving';
-        movementColor = 'success';
-      } else if (product.qtySold >= 20) {
-        movement = 'Medium-moving';
-        movementColor = 'info';
-      } else if (product.qtySold >= 5) {
-        movement = 'Slow-moving';
-        movementColor = 'warning';
-      }
-
-      return {
-        ...product,
-        movement,
-        movementColor,
-        currentStock: currentVariant?.stock || 0,
-        stockStatus: currentVariant?.status || 'inactive',
-        lowStockThreshold: currentVariant?.lowStockThreshold || 0,
-        supplier: currentVariant?.supplier || 'Unknown',
-        type: product.category === 'ingredients' ? 'Perishable' : 'Non-Perishable'
-      };
-    });
-
-    console.log('Final analysis:', productsWithMovement.length);
-    return productsWithMovement;
-  }, [transactions, inventory, startDate, endDate]);
-
-  // Filter products based on filters
-  const filteredProducts = useMemo(() => {
-    return productAnalysis.filter(product => {
-      const movementMatch = movementFilter === 'all' || product.movement === movementFilter;
-      const categoryMatch = categoryFilter === 'all' || product.category === categoryFilter;
-      return movementMatch && categoryMatch;
-    });
-  }, [productAnalysis, movementFilter, categoryFilter]);
+    // Convert to array and sort by revenue
+    return Object.values(productMap).sort((a, b) => b.totalRevenue - a.totalRevenue);
+  }, [filteredOrders]);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
-    const totalQty = filteredProducts.reduce((sum, p) => sum + p.qtySold, 0);
-    const totalRevenue = filteredProducts.reduce((sum, p) => sum + p.totalRevenue, 0);
-    const totalProducts = filteredProducts.length;
+    const totalOrders = filteredOrders.length;
+    const totalRevenue = filteredOrders.reduce((sum, order) => sum + parseFloat(order.total || 0), 0);
+    const totalItems = filteredOrders.reduce((sum, order) => {
+      return sum + (order.items || []).reduce((itemSum, item) => itemSum + item.quantity, 0);
+    }, 0);
     
-    const movementBreakdown = {
-      'Fast-moving': filteredProducts.filter(p => p.movement === 'Fast-moving').length,
-      'Medium-moving': filteredProducts.filter(p => p.movement === 'Medium-moving').length,
-      'Slow-moving': filteredProducts.filter(p => p.movement === 'Slow-moving').length,
-      'Non-moving': filteredProducts.filter(p => p.movement === 'Non-moving').length
-    };
+    const onlineOrders = filteredOrders.filter(o => o.type === 'online').length;
+    const inStoreOrders = filteredOrders.filter(o => o.type === 'in-store').length;
+
+    const uniqueProducts = productAnalytics.length;
+    const topProduct = productAnalytics[0] || null;
 
     return {
-      totalQty,
+      totalOrders,
       totalRevenue,
-      totalProducts,
-      movementBreakdown,
-      avgRevenuePerProduct: totalProducts > 0 ? totalRevenue / totalProducts : 0
+      totalItems,
+      onlineOrders,
+      inStoreOrders,
+      avgOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0,
+      uniqueProducts,
+      topProduct
     };
-  }, [filteredProducts]);
+  }, [filteredOrders, productAnalytics]);
 
   const resetFilters = () => {
     setStartDate('');
     setEndDate('');
-    setMovementFilter('all');
-    setCategoryFilter('all');
+    setTypeFilter('all');
   };
 
   const formatCurrency = (amount) => {
@@ -230,27 +134,31 @@ function Reports() {
     }).format(amount);
   };
 
-  const exportData = (format) => {
-    const exportData = filteredProducts.map(product => ({
-      'Product Name': product.name,
-      'Variant': product.size,
-      'Category': product.category,
-      'Qty Sold': product.qtySold,
-      'Total Revenue': product.totalRevenue,
-      'Average Price': product.avgPrice.toFixed(2),
-      'Movement Type': product.movement,
-      'Current Stock': product.currentStock,
-      'Supplier': product.supplier
-    }));
+  // Generate Excel File
+  const exportToExcel = () => {
+    const excelData = productAnalytics.map(product => {
+      return {
+        'Product ID': product.productId,
+        'Product Name': product.productName,
+        'Variant': product.variantName,
+        'Quantity Sold': product.totalQuantitySold,
+        'Total Revenue (₱)': product.totalRevenue
+      };
+    });
 
-    console.log(`Exporting ${exportData.length} products as ${format}`, exportData);
-    alert(`Export functionality would generate ${format.toUpperCase()} file with ${exportData.length} products`);
-    setShowExportModal(false);
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Product Sales');
+    
+    const date = new Date().toISOString().split('T')[0];
+    const dateRange = startDate && endDate ? `_${startDate}_to_${endDate}` : '';
+    XLSX.writeFile(workbook, `Product_Sales_Report${dateRange}_${date}.xlsx`);
+    setShowExportConfirm(false);
   };
 
   const renderFilters = () => (
     <div className="row g-3 align-items-end">
-      <div className="col-md-2">
+      <div className="col-md-3">
         <label className="form-label fw-semibold">Start Date</label>
         <input 
           type="date" 
@@ -260,7 +168,7 @@ function Reports() {
           max={endDate || undefined}
         />
       </div>
-      <div className="col-md-2">
+      <div className="col-md-3">
         <label className="form-label fw-semibold">End Date</label>
         <input 
           type="date" 
@@ -270,124 +178,120 @@ function Reports() {
           min={startDate || undefined}
         />
       </div>
-      <div className="col-md-4">
-        <label className="form-label fw-semibold">Product Movement</label>
+      <div className="col-md-3">
+        <label className="form-label fw-semibold">Order Type</label>
         <select 
           className="form-select"
-          value={movementFilter}
-          onChange={(e) => setMovementFilter(e.target.value)}
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
         >
-          <option value="all">All Products</option>
-          <option value="Fast-moving">Fast-Moving (50+ sold)</option>
-          <option value="Medium-moving">Medium-Moving (20-49 sold)</option>
-          <option value="Slow-moving">Slow-Moving (5-19 sold)</option>
-          <option value="Non-moving">Non-Moving (0-4 sold)</option>
+          <option value="all">All Orders</option>
+          <option value="online">Online Orders</option>
+          <option value="in-store">In-Store Orders</option>
         </select>
       </div>
-      <div className="col-md-4">
+      <div className="col-md-3">
         <div className="d-flex gap-2">
           <button className="btn btn-outline-danger" onClick={resetFilters}>
             <i className="bi bi-arrow-clockwise"></i> Reset
           </button>
           <button 
             className="btn btn-primary" 
-            onClick={() => setShowExportModal(true)}
-            disabled={filteredProducts.length === 0}
+            onClick={() => setShowExportConfirm(true)}
+            disabled={filteredOrders.length === 0}
           >
-            <i className="bi bi-download"></i> Export
+            <i className="bi bi-download"></i> Export to Excel
           </button>
         </div>
       </div>
     </div>
   );
 
-  const renderTableHeader = () => (
-    <thead className="table-dark sticky-top">
-      <tr>
-        <th scope="col">Product Name</th>
-        <th scope="col" className="text-center">Qty Sold</th>
-        <th scope="col" className="text-center">Movement</th>
-        <th scope="col" className="text-center">Total Amount</th>
-        <th scope="col" className="text-end">Total Revenue</th>
-      </tr>
-    </thead>
+  const renderProductsTable = () => (
+    <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
+      <table className="table table-hover mb-0">
+        <thead className="table-dark sticky-top">
+          <tr>
+            <th scope="col">Product ID</th>
+            <th scope="col">Product Name</th>
+            <th scope="col" className="text-center">Variant</th>
+            <th scope="col" className="text-center">Qty Sold</th>
+            <th scope="col" className="text-end">Total Revenue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {productAnalytics.length > 0 ? productAnalytics.map((product, index) => {
+            return (
+              <tr key={`${product.productId}-${index}`}>
+                <td><code className="small">{product.productId}</code></td>
+                <td>{product.productName}</td>
+                <td className="text-center">{product.variantName}</td>
+                <td className="text-center">
+                  <strong className="text-primary">{product.totalQuantitySold}</strong>
+                </td>
+                <td className="text-end fw-semibold">
+                  {formatCurrency(product.totalRevenue)}
+                </td>
+              </tr>
+            );
+          }) : (
+            <tr>
+              <td colSpan="5" className="text-center py-5 text-muted">
+                <i className="bi bi-box fs-1 d-block mb-3"></i>
+                <h5>No product data found</h5>
+              </td>
+            </tr>
+          )}
+        </tbody>
+        {productAnalytics.length > 0 && (
+          <tfoot className="table-light">
+            <tr className="fw-bold">
+              <td colSpan="3">Total ({productAnalytics.length} unique products)</td>
+              <td className="text-center">{summaryStats.totalItems}</td>
+              <td className="text-end">{formatCurrency(summaryStats.totalRevenue)}</td>
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
   );
 
-  const renderTableRow = (product) => (
-    <tr key={`${product.id}`}>
-      <td>
-        <div>
-          <div className="fw-semibold">{product.name}</div>
-          <small className="text-muted">ID: {product.id}</small>
-        </div>
-      </td>
-      <td className="text-center">
-        <strong>{product.qtySold}</strong>
-      </td>
-      <td className="text-center">
-        <span className={`badge bg-${product.movementColor} ${product.movementColor === 'warning' ? 'text-dark' : ''}`}>
-          {product.movement}
-        </span>
-      </td>
-      <td className="text-center">
-        {formatCurrency(product.avgPrice)}
-      </td>
-      <td className="fw-semibold text-end">
-        {formatCurrency(product.totalRevenue)}
-      </td>
-    </tr>
-  );
-
-  const renderEmptyState = () => (
-    <tr>
-      <td colSpan="5" className="text-center py-5 text-muted">
-        <i className="bi bi-inbox fs-1 d-block mb-3"></i>
-        <h5>No sales data found</h5>
-        <p>Try adjusting your filters, date range, or complete some transactions first</p>
-        <small className="text-info">
-          Transactions: {transactions.length} | Products: {inventory.length}
-        </small>
-      </td>
-    </tr>
-  );
-
-  const renderTableFooter = () => (
-    <tfoot className="table-light">
-      <tr className="fw-bold">
-        <td>Total</td>
-        <td colSpan="3"></td>
-        <td className="text-end">{formatCurrency(summaryStats.totalRevenue)}</td>
-      </tr>
-    </tfoot>
-  );
-
-  // Export Modal (same as before)
   const ExportModal = () => (
-    showExportModal && (
-      <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)'}}>
-        <div className="modal-dialog">
+    showExportConfirm && (
+      <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+        <div className="modal-dialog modal-dialog-centered">
           <div className="modal-content">
             <div className="modal-header">
-              <h5 className="modal-title">Export Sales Report</h5>
-              <button type="button" className="btn-close" onClick={() => setShowExportModal(false)}></button>
+              <h5 className="modal-title">
+                <i className="bi bi-file-earmark-excel text-success me-2"></i>
+                Export Product Sales Report
+              </h5>
+              <button type="button" className="btn-close" onClick={() => setShowExportConfirm(false)}></button>
             </div>
             <div className="modal-body">
-              <p>Export {filteredProducts.length} products to:</p>
-              <div className="d-grid gap-2">
-                <button className="btn btn-outline-success" onClick={() => exportData('excel')}>
-                  <i className="bi bi-file-earmark-excel me-2"></i>Excel (.xlsx)
-                </button>
-                <button className="btn btn-outline-primary" onClick={() => exportData('csv')}>
-                  <i className="bi bi-file-earmark-text me-2"></i>CSV (.csv)
-                </button>
-                <button className="btn btn-outline-danger" onClick={() => exportData('pdf')}>
-                  <i className="bi bi-file-earmark-pdf me-2"></i>PDF (.pdf)
-                </button>
-              </div>
+              <p className="mb-2">
+                You are about to export <strong>{productAnalytics.length} products</strong> to an Excel file.
+              </p>
+              <p className="text-muted mb-0">
+                <i className="bi bi-info-circle me-1"></i>
+                The file will include Product ID, Product Name, Variant, Quantity Sold, and Total Revenue.
+              </p>
             </div>
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setShowExportModal(false)}>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                onClick={() => setShowExportConfirm(false)}
+              >
                 Cancel
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-success" 
+                onClick={exportToExcel}
+              >
+                <i className="bi bi-download me-2"></i>
+                Export Now
               </button>
             </div>
           </div>
@@ -405,37 +309,29 @@ function Reports() {
             <div className="mt-3">Loading report data...</div>
           </div>
         ) : (
-          <div className="row">
-            <div className="col-12">
-              <div className="card border-0 shadow-sm">
-                {/* Report Header */}
-                <div className="card-header bg-white border-0 pb-4">
-                  <div className="d-flex justify-content-between align-items-center mb-3">
-                    <h2 className="mb-0">Sales & Product Movement Report</h2>
-                    <span className="badge bg-primary">{filteredProducts.length} variants</span>
+          <>
+            <div className="row">
+              <div className="col-12">
+                <div className="card border-0 shadow-sm">
+                  {/* Report Header */}
+                  <div className="card-header bg-white border-0 pb-4">
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <h2 className="mb-0">Product Sales Analytics</h2>
+                      <span className="badge bg-success">
+                        {productAnalytics.length} products
+                      </span>
+                    </div>
+                    {renderFilters()}
                   </div>
-                  {renderFilters()}
-                </div>
-                
-                {/* Report Table */}
-                <div className="card-body p-0 mt-3">
-                  <div className="table-responsive" style={{maxHeight: '500px', overflowY: 'auto'}}>
-                    <table className="table table-hover mb-0">
-                      {renderTableHeader()}
-                      <tbody>
-                        {filteredProducts.length > 0 
-                          ? filteredProducts.map(renderTableRow)
-                          : renderEmptyState()
-                        }
-                      </tbody>
-                      {filteredProducts.length > 0 && renderTableFooter()}
-                    </table>
+                  
+                  {/* Products Table */}
+                  <div className="card-body p-0 mt-3">
+                    {renderProductsTable()}
                   </div>
                 </div>
-                
               </div>
             </div>
-          </div>
+          </>
         )}
       </div>
       {/* Export Modal */}

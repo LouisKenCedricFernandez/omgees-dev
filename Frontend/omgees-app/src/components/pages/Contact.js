@@ -1,5 +1,5 @@
 import React from 'react';
-
+import {Link} from 'react-router-dom'; 
 
 function Contact() {
     return (
@@ -29,24 +29,24 @@ function Contact() {
             <h5 className="mb-3">Quick Links</h5>
             <ul className="list-unstyled">
               <li className="mb-2">
-                <a href="/about" className="text-dark text-decoration-none">
-                  <i className="fas fa-angle-right me-2"></i>About Us
-                </a>
+                <Link to="/" className="text-dark text-decoration-none">
+                  <i className="fas fa-angle-right me-2"></i>Home
+                </Link>
               </li>
               <li className="mb-2">
-                <a href="/" className="text-dark text-decoration-none">
+                <Link to="/products/ingredients" className="text-dark text-decoration-none">
                   <i className="fas fa-angle-right me-2"></i>Ingredients
-                </a>
+                </Link>
               </li>
               <li className="mb-2">
-                <a href="/" className="text-dark text-decoration-none">
+                <Link to="/products/tools" className="text-dark text-decoration-none">
                   <i className="fas fa-angle-right me-2"></i>Tools
-                </a>
+                </Link>
               </li>
               <li className="mb-2">
-                <a href="/" className="text-dark text-decoration-none">
+                <Link to="/products/packaging" className="text-dark text-decoration-none">
                   <i className="fas fa-angle-right me-2"></i>Packaging
-                </a>
+                </Link>
               </li>
             </ul>
           </div>

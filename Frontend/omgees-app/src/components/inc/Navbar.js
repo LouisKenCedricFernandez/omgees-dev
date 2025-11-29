@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom'; // Fixed: Both imports from same source
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom'; 
 import omgeesLogo from '../images/omgees.png';
 
 function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
@@ -7,6 +7,7 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
     const navigate = useNavigate();
     const [toastMessage, setToastMessage] = useState('');
     const [showToast, setShowToast] = useState(false);
+    const [stockWarnings, setStockWarnings] = useState([]);
 
     const toastRef = useRef(null);
 
@@ -19,6 +20,59 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
             return () => clearTimeout(timer);
         }
     }, [showToast]);
+
+    // Stock validation function
+    const validateStock = useCallback(() => {
+        const warnings = [];
+        cartItems.forEach(item => {
+            const availableStock = item.selectedVariant 
+                ? (item.selectedVariant.count || item.selectedVariant.product_totalstock || 0)
+                : (item.count || item.product_totalstock || 0);
+            
+            if (item.quantity > availableStock) {
+                warnings.push({
+                    itemName: item.displayName || item.name,
+                    requested: item.quantity,
+                    available: availableStock,
+                    itemId: item.id,
+                    variantId: item.selectedVariant?.id
+                });
+            }
+        });
+        setStockWarnings(warnings);
+        return warnings.length === 0;
+    }, [cartItems]);
+
+    // Run stock validation whenever cart items change
+    useEffect(() => {
+        if (cartItems.length > 0) {
+            validateStock();
+        } else {
+            setStockWarnings([]);
+        }
+    }, [cartItems, validateStock]);
+
+    // Auto-fix stock quantities
+    const fixStockQuantities = () => {
+        if (stockWarnings.length > 0 && onUpdateCart) {
+            const fixedItems = cartItems.map(item => {
+                const warning = stockWarnings.find(w => 
+                    w.itemId === item.id && 
+                    (w.variantId ? w.variantId === item.selectedVariant?.id : !item.selectedVariant)
+                );
+                
+                if (warning && warning.available > 0) {
+                    return { ...item, quantity: warning.available };
+                } else if (warning && warning.available === 0) {
+                    return null;
+                }
+                return item;
+            }).filter(Boolean);
+            
+            onUpdateCart(fixedItems);
+            showToastMessage('Cart quantities adjusted to available stock levels');
+        }
+    };
 
     const showToastMessage = (message) => {
         setToastMessage(message);
@@ -34,6 +88,23 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
             }
             return item;
         }).filter(Boolean);
+
+        if (onUpdateCart) {
+            onUpdateCart(updatedItems);
+        }
+    };
+
+    const handleQuantityChange = (productId, variantId, newQuantity) => {
+        const quantity = parseInt(newQuantity) || 0;
+        if (quantity <= 0) return;
+        
+        const updatedItems = cartItems.map(item => {
+            if (item.id === productId && 
+                (variantId ? item.selectedVariant?.id === variantId : !item.selectedVariant)) {
+                return { ...item, quantity };
+            }
+            return item;
+        });
 
         if (onUpdateCart) {
             onUpdateCart(updatedItems);
@@ -70,79 +141,88 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
 
     return (
         <>
-            <nav className="navbar fixed-top navbar-expand-lg navbar-custom shadow mt-3">
+            <nav className="navbar fixed-top navbar-expand-lg navbar-custom shadow">
                 <div className="container-fluid">
-                    <img src={omgeesLogo} alt="OMGees Logo" width="30" height="24" className="d-inline-block align-text-top navbar-logo me-2"/>
+                    <img 
+                        src={omgeesLogo} 
+                        alt="OMGees Logo" 
+                        width="30" 
+                        height="24" 
+                        className="d-inline-block align-text-top navbar-logo me-2"
+                    />
                     <Link to="/" className="navbar-brand fw-bold">OMGees</Link>
-                    <button className="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
-                        aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+                    <button 
+                        className="navbar-toggler" 
+                        type="button" 
+                        data-bs-toggle="collapse" 
+                        data-bs-target="#navbarSupportedContent"
+                        aria-controls="navbarSupportedContent" 
+                        aria-expanded="false" 
+                        aria-label="Toggle navigation"
+                    >
                         <span className="navbar-toggler-icon"></span>
                     </button>
+                    
                     <div className="collapse navbar-collapse" id="navbarSupportedContent">
                         <ul className="navbar-nav me-auto mb-2 mb-lg-0">
                             <li className="nav-item">
-                                <Link to="/" className="nav-link px-3">Home</Link>
+                                <Link to="/" className="nav-link px-3">
+                                    <i className="fas fa-home me-2"></i>Home
+                                </Link>
                             </li>
                             <li className="nav-item">
-                                <Link to="/profile" className="nav-link px-3">Profile</Link>
+                                <Link to="/track-order" className="nav-link px-3">
+                                    <i className="fas fa-shipping-fast me-2"></i>Orders
+                                </Link>
                             </li>
-                            <li className="nav-item dropdown">
-                                <a 
-                                    className="nav-link dropdown-toggle px-3" 
-                                    href="/" 
-                                    role="button" 
-                                    data-bs-toggle="dropdown" 
-                                    aria-expanded="false"
+                            <li className="nav-item">
+                                <button 
+                                    className="btn btn-outline-light btn-sm position-relative px-3 mt-1" 
+                                    type="button" 
+                                    onClick={() => setShowCart(true)}
+                                    style={{ border: '1px solid rgba(255,255,255,0.5)' }}
                                 >
-                                    Products
-                                </a>
-                                <ul className="dropdown-menu">
-                                    <li><Link to="/products/ingredients" className="dropdown-item">Ingredients</Link></li>
-                                    <li><Link to="/products/tools" className="dropdown-item">Tools</Link></li>
-                                    <li><hr className="dropdown-divider"/></li>
-                                    <li><Link to="/products/packaging" className="dropdown-item">Packaging</Link></li>
-                                </ul>
+                                    <i className="fas fa-shopping-cart me-1"></i>
+                                    {getTotalItems() > 0 && (
+                                        <span 
+                                            className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
+                                            style={{ fontSize: '0.65rem', minWidth: '18px', height: '18px' }}
+                                        >
+                                            {getTotalItems()}
+                                        </span>
+                                    )}
+                                </button>
                             </li>
                         </ul>
-                        <div className="d-flex p-2">
-                            <input className="form-control me-2" type="search" placeholder="Search" aria-label="Search"/>
-                            <button className="btn btn-outline-light" type="button">Search</button>
-                        </div>
                     </div>
 
-                    {/* Cart Button */}
+                    {/* User Display and Logout Button*/}
                     <div className="d-flex align-items-center me-3">
-                        <button 
-                            className="btn btn-outline-light position-relative me-3" 
-                            type="button" 
-                            onClick={() => setShowCart(true)}
-                            style={{ border: '1px solid rgba(255,255,255,0.5)' }}
-                        >
-                            <i className="fas fa-shopping-cart fs-5"></i>
-                            {getTotalItems() > 0 && (
-                                <span 
-                                    className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
-                                    style={{ fontSize: '0.65rem', minWidth: '18px', height: '18px' }}
-                                >
-                                    {getTotalItems()}
-                                </span>
-                            )}
+                        {user && (
+                            <span className="text-white me-3">
+                                <i className="fas fa-user me-2"></i>
+                                {user.fullname || user.name}
+                            </span>
+                        )}
+                        <button className="btn btn-outline-primary btn-sm" onClick={onLogout}>
+                            <i className="fas fa-sign-out-alt me-2"></i>Logout
                         </button>
-                    </div>
-
-                    <div className="d-flex align-items-center p-2">
-                        <span className="me-3 text-white">Welcome, {user?.name || 'User'}!</span>
-                        <button className="btn btn-outline-primary btn-sm" onClick={onLogout}>Logout</button>
                     </div>
                 </div>
             </nav>
 
-            {/* Shopping Cart Offcanvas */}
+            {/* Shopping Cart Offcanvas - Keep all your existing cart code */}
             {showCart && (
                 <div className="offcanvas offcanvas-end show" style={{visibility: 'visible', width: '400px'}} tabIndex="-1">
                     <div className="offcanvas-header border-bottom">
                         <h5 className="offcanvas-title">
                             <i className="fas fa-shopping-cart me-2"></i>Shopping Cart
+                            {stockWarnings.length > 0 && (
+                                <span className="badge bg-warning text-dark ms-2" style={{ fontSize: '0.7rem' }}>
+                                    <i className="fas fa-exclamation-triangle me-1"></i>
+                                    {stockWarnings.length} stock issue{stockWarnings.length > 1 ? 's' : ''}
+                                </span>
+                            )}
                         </h5>
                         <button 
                             type="button" 
@@ -164,48 +244,104 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
                             </div>
                         ) : (
                             <>
-                                <div className="p-3" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                                    {cartItems.map((item) => (
-                                        <div key={`${item.id}-${item.selectedVariant?.id || 'default'}`} className="d-flex align-items-center border-bottom py-3">
-                                            <img 
-                                                src={item.image} 
-                                                className="rounded me-3" 
-                                                alt={item.name}
-                                                style={{width: '60px', height: '60px', objectFit: 'cover'}}
-                                            />
+                                {/* Stock Warning Alert */}
+                                {stockWarnings.length > 0 && (
+                                    <div className="alert alert-warning border-0 m-3 mb-2 p-2">
+                                        <div className="d-flex align-items-start">
+                                            <i className="fas fa-exclamation-triangle text-warning me-2" style={{ fontSize: '0.9rem', marginTop: '2px' }}></i>
                                             <div className="flex-grow-1">
-                                                <h6 className="mb-1 small">{item.displayName || item.name}</h6>
-                                                <small className="text-muted">₱{item.price.toLocaleString()}</small>
-                                                <div className="d-flex align-items-center mt-2">
-                                                    <button 
-                                                        className="btn btn-sm btn-outline-secondary me-2" 
-                                                        onClick={() => updateQuantity(item.id, item.selectedVariant?.id, -1)}
-                                                        style={{ width: '28px', height: '28px', padding: '0', fontSize: '0.7rem' }}
-                                                    >
-                                                        <i className="fas fa-minus"></i>
-                                                    </button>
-                                                    <span className="mx-2 small fw-bold">{item.quantity}</span>
-                                                    <button 
-                                                        className="btn btn-sm btn-outline-secondary me-2" 
-                                                        onClick={() => updateQuantity(item.id, item.selectedVariant?.id, 1)}
-                                                        style={{ width: '28px', height: '28px', padding: '0', fontSize: '0.7rem' }}
-                                                    >
-                                                        <i className="fas fa-plus"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="text-end">
-                                                <div className="fw-bold small text-primary">₱{(item.price * item.quantity).toLocaleString()}</div>
+                                                <h6 className="fw-bold mb-1" style={{ fontSize: '0.85rem' }}>Stock Issue</h6>
+                                                <p className="mb-2 small" style={{ fontSize: '0.75rem' }}>Some items exceed available stock:</p>
+                                                <ul className="mb-2 ps-3" style={{ fontSize: '0.75rem' }}>
+                                                    {stockWarnings.map((warning, index) => (
+                                                        <li key={index}>
+                                                            <strong>{warning.itemName}</strong>: 
+                                                            Requested {warning.requested}, Available {warning.available}
+                                                        </li>
+                                                    ))}
+                                                </ul>
                                                 <button 
-                                                    className="btn btn-sm btn-outline-danger mt-1" 
-                                                    onClick={() => removeFromCart(item.id, item.selectedVariant?.id)}
-                                                    style={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                                                    className="btn btn-warning btn-sm w-100" 
+                                                    onClick={fixStockQuantities}
+                                                    style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
                                                 >
-                                                    <i className="fas fa-trash"></i>
+                                                    <i className="fas fa-magic me-1"></i>
+                                                    Auto-fix Quantities
                                                 </button>
                                             </div>
                                         </div>
-                                    ))}
+                                    </div>
+                                )}
+
+                                <div className="p-3" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                                    {cartItems.map((item) => {
+                                        const warning = stockWarnings.find(w => 
+                                            w.itemId === item.id && 
+                                            (w.variantId ? w.variantId === item.selectedVariant?.id : !item.selectedVariant)
+                                        );
+
+                                        return (
+                                            <div 
+                                                key={`${item.id}-${item.selectedVariant?.id || 'default'}`} 
+                                                className={`d-flex align-items-center border-bottom py-3 ${warning ? 'border border-warning rounded p-2 mb-2' : ''}`}
+                                            >
+                                                <img 
+                                                    src={item.image} 
+                                                    className="rounded me-3" 
+                                                    alt={item.name}
+                                                    style={{width: '60px', height: '60px', objectFit: 'cover'}}
+                                                />
+                                                <div className="flex-grow-1">
+                                                    <h6 className="mb-1 small">{item.displayName || item.name}</h6>
+                                                    <small className="text-muted">₱{item.price.toLocaleString()}</small>
+                                                    {warning && (
+                                                        <div className="text-warning small mt-1">
+                                                            <i className="fas fa-exclamation-triangle me-1"></i>
+                                                            Only {warning.available} available
+                                                        </div>
+                                                    )}
+                                                    <div className="d-flex align-items-center mt-2">
+                                                        <div className="input-group" style={{ width: '120px' }}>
+                                                            <button 
+                                                                className="btn btn-sm btn-outline-secondary" 
+                                                                type="button"
+                                                                onClick={() => updateQuantity(item.id, item.selectedVariant?.id, -1)}
+                                                                style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+                                                            >
+                                                                <i className="fas fa-minus"></i>
+                                                            </button>
+                                                            <input 
+                                                                type="number" 
+                                                                className="form-control form-control-sm text-center" 
+                                                                value={item.quantity}
+                                                                onChange={(e) => handleQuantityChange(item.id, item.selectedVariant?.id, e.target.value)}
+                                                                min="1"
+                                                                style={{ fontSize: '0.8rem', padding: '0.25rem' }}
+                                                            />
+                                                            <button 
+                                                                className="btn btn-sm btn-outline-secondary" 
+                                                                type="button"
+                                                                onClick={() => updateQuantity(item.id, item.selectedVariant?.id, 1)}
+                                                                style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+                                                            >
+                                                                <i className="fas fa-plus"></i>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-end">
+                                                    <div className="fw-bold small text-primary">₱{(item.price * item.quantity).toLocaleString()}</div>
+                                                    <button 
+                                                        className="btn btn-sm btn-outline-danger mt-1" 
+                                                        onClick={() => removeFromCart(item.id, item.selectedVariant?.id)}
+                                                        style={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                                                    >
+                                                        <i className="fas fa-trash"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                                 
                                 {/* Cart Total */}
@@ -220,9 +356,16 @@ function Navbar({ user, onLogout, cartItems = [], onUpdateCart }) {
                                             setShowCart(false);
                                             navigate('/checkout');
                                         }}
+                                        disabled={stockWarnings.length > 0}
                                     >
                                         <i className="fas fa-credit-card me-2"></i>Proceed to Checkout
                                     </button>
+                                    {stockWarnings.length > 0 && (
+                                        <small className="text-warning d-block text-center mb-2">
+                                            <i className="fas fa-exclamation-triangle me-1"></i>
+                                            Fix stock issues to proceed
+                                        </small>
+                                    )}
                                     <button 
                                         className="btn btn-outline-secondary w-100" 
                                         onClick={() => setShowCart(false)}

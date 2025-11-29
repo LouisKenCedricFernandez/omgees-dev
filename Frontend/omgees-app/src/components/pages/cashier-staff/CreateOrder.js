@@ -1,81 +1,45 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo} from 'react';
 import axios from 'axios';
+import useInventory from '../../../components/hooks/useInventory';
 
 function CreateOrder({ user, onOrderComplete }) {
-  const [inventory, setInventory] = useState([]);
-   const [cartItems, setCartItems] = useState([]);
-  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const {inventory, isLoading, error, refreshInventory} = useInventory(true);
+  const [cartItems, setCartItems] = useState([]);
   const [orderNotes, setOrderNotes] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
   const [amountReceived, setAmountReceived] = useState(0);
-
-  // Fetch inventory on component mount
-  useEffect(() => {
-    axios.get('http://localhost:5000/inventory')
-      .then(res => {
-        if (Array.isArray(res.data)) {
-          const normalized = res.data.map(product => ({
-            id: product.product_id ?? product.id,
-            baseProductId: product.id ?? 0,
-            name: product.product_name ?? product.name ?? "",
-            displayName: `${product.product_name ?? product.name ?? ""} (${product.product_variant ?? product.size ?? ""})`,
-            price: product.product_price ?? product.price ?? 0,
-            stock: product.product_totalstock ?? product.stock ?? 0,
-            size: product.product_variant ?? product.size ?? "",
-            category: product.product_category ?? product.category ?? "",
-            image: product.product_image
-  ? `http://localhost:5000/${product.product_image.replace(/^public\//, '').replace(/^\/?uploads\//, 'uploads/')}`
-  : (product.image || "https://via.placeholder.com/150"), 
-            status: product.product_status ?? product.status ?? "In Stock"
-          }));
-          setInventory(normalized);
-        }
-      })
-      .catch(err => {
-        console.error('Failed to load inventory:', err);
-      });
-  }, []);
-
-  const handlePayment = async (orderData) => {
-  try {
-    const response = await fetch('http://localhost:5000/add-order', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(orderData),
-    });
-    const result = await response.json();
-    if (result.success) {
-      // Payment/order recorded successfully
-      // You can show a success message or redirect here
-    } else {
-      // Handle error
-    }
-  } catch (error) {
-    // Handle network or server error
-  }
-};
- 
+  const [searchTerm, setSearchTerm] = useState('');
 
   // Convert inventory to usable products for cashier
   const availableProducts = useMemo(() => {
-  return inventory
-    .filter(item => 
-      (item.status === 'In Stock' || item.status === 'active') && item.stock > 0
-    )
-    .map(item => ({
-      id: item.id,
-      baseProductId: item.baseProductId,
-      name: item.name,
-      displayName: `${item.name} (${item.size})`,
-      price: item.price,
-      stock: item.stock,
-      size: item.size,
-      category: item.category,
-      image: item.image
-    }));
-}, [inventory]);
+    return inventory
+      .filter(item => {
+        const totalStock = item.stock || item.product_totalstock || 0;
+        const reservedStock = item.product_reservedstock || 0;
+        const availableStock = item.available_stock || (totalStock - reservedStock);
+        return (item.status === 'In Stock' || item.status === 'active') && availableStock > 0;
+      })
+      .map(item => {
+        const totalStock = item.stock || item.product_totalstock || 0;
+        const reservedStock = item.product_reservedstock || 0;
+        const availableStock = item.available_stock || (totalStock - reservedStock);
+        
+        return {
+          id: item.id,
+          baseProductId: item.baseProductId,
+          name: item.name,
+          displayName: `${item.name} (${item.size})`,
+          price: item.price,
+          stock: availableStock, // Use available stock for POS
+          totalStock: totalStock,
+          reservedStock: reservedStock,
+          size: item.size,
+          category: item.category,
+          image: item.image 
+        };
+      });
+  }, [inventory]);
 
   // Filter products by category
   const filteredProducts = useMemo(() => {
@@ -88,6 +52,26 @@ function CreateOrder({ user, onOrderComplete }) {
     const cats = [...new Set(availableProducts.map(p => p.category))];
     return cats;
   }, [availableProducts]);
+
+  // Filter by search term and category
+  const searchFilteredProducts = useMemo(() => {
+    if (!searchTerm.trim()) return filteredProducts;
+    
+    const query = searchTerm.toLowerCase();
+    return filteredProducts.filter(product =>
+      product.displayName.toLowerCase().includes(query) ||
+      product.name.toLowerCase().includes(query) ||
+      product.category.toLowerCase().includes(query)
+    );
+  }, [filteredProducts, searchTerm]);
+
+  const getTotal = () => {
+    return cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
+  };
+
+  const getChange = () => {
+    return amountReceived - getTotal();
+  };
 
   const addToCart = (product) => {
     const existingItem = cartItems.find(item => item.id === product.id);
@@ -105,11 +89,6 @@ function CreateOrder({ user, onOrderComplete }) {
       setCartItems([...cartItems, { ...product, quantity: 1 }]);
     }
   };
-
-  const getChange = () => {
-  return amountReceived - getTotal();
-  };
-
 
   const updateQuantity = (productId, change) => {
     const product = availableProducts.find(p => p.id === productId);
@@ -131,11 +110,7 @@ function CreateOrder({ user, onOrderComplete }) {
     setCartItems(cartItems.filter(item => item.id !== productId));
   };
 
-  const getTotal = () => {
-    return cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
-  };
-
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (cartItems.length === 0) {
@@ -143,114 +118,126 @@ function CreateOrder({ user, onOrderComplete }) {
       return;
     }
 
-    // For cash payments, validate sufficient amount
     if (paymentMethod === 'cash' && getChange() < 0) {
       alert('Insufficient amount received from customer');
       return;
     }
 
-    const newOrder = {
+    const orderData = {
       orderId: `ORD-${Date.now()}`,
-      orderType: 'in-store',
-      createdBy: user?.email || 'cashier@store.com',
-      cashierName: user?.name || 'Store Cashier',
-      timestamp: new Date().toISOString(),
-      customer: {
-        name: 'Walk-in Customer', // Keep this generic
-        phone: '',
-        email: ''
-      },
-      items: cartItems,
-      payment: {
-        method: paymentMethod,
-        status: 'completed',
-        amountReceived: paymentMethod === 'cash' ? amountReceived : getTotal(),
-        change: paymentMethod === 'cash' ? getChange() : 0
-      },
+      cashierName: user?.fullname || user?.name || 'Store Cashier',
+      items: cartItems.map(item => ({
+        id: item.id,
+        product_id: item.id,
+        name: item.displayName,
+        product_name: item.displayName,
+        price: item.price,
+        quantity: item.quantity,
+        variant: item.size ? { name: item.size } : null
+      })),
       total: getTotal(),
       status: 'completed',
+      paymentMethod: paymentMethod,
       notes: orderNotes
     };
 
-    axios.post('http://localhost:5000/add-order', newOrder)
-  .then(response => {
-    if (response.data.success) {
-      // For each item in the order, update stock and sold
-      cartItems.forEach(item => {
-        axios.post('http://localhost:5000/update-stock', {
-          product_id: item.id,
-          updated_data: {
-            product_name: item.name,
-            product_category: item.category,
-            product_variant: item.size,
-            product_totalstock: item.stock - item.quantity,
-            product_price: item.price,
-            product_description: item.description || "",
-            product_supplier: item.supplier || "",
-            product_totalsold: (item.sold || 0) + item.quantity
-          }
-        });
-      });
+    console.log('📦 Submitting order:', orderData);
 
-      // --- Add this block to log activity ---
-      axios.post('http://localhost:5000/activity-log', {
-      activity: 'Created Order',
-      user: user?.email || 'cashier@store.com',
-      type: 'order',
-      details: `Order ID: ${newOrder.orderId}, Total: ₱${getTotal().toLocaleString()}`,
-      timestamp: new Date().toISOString()
-      }).catch(err => {
-        console.error('Failed to log activity:', err);
-      });
-      // --- End activity log block ---
+    try {
+      const response = await axios.post('http://localhost:5000/add-order', orderData);
+      
+      if (response.data.success) {
+        console.log('✅ Order created successfully:', response.data.orderNumber);
+        await refreshInventory();
+        
+        try {
+          await axios.post('http://localhost:5000/activity-log', {
+            activity: 'Created In-Store Order',
+            user: user?.email || 'cashier@store.com',
+            type: 'order',
+            details: `Order ID: ${orderData.orderId}, Total: ₱${getTotal().toLocaleString()}`,
+            timestamp: new Date().toISOString()
+          });
+        } catch (err) {
+          console.error('Failed to log activity:', err);
+        }
 
-      // Optionally show a success message or do something else
-      console.log('Order/payment recorded in database');
-    } else {
-      // Optionally show an error message
-      console.error('Order/payment failed to record in database');
+        const completedOrder = {
+          orderId: response.data.orderNumber,
+          orderType: 'in-store',
+          createdBy: user?.email || 'cashier@store.com',
+          cashierName: user?.fullname || user?.name || 'Store Cashier',
+          timestamp: new Date().toISOString(),
+          customer: {
+            name: orderData.cashierName,
+            phone: '',
+            email: ''
+          },
+          items: cartItems,
+          payment: {
+            method: paymentMethod,
+            status: 'paid',
+            amountReceived: paymentMethod === 'cash' ? amountReceived : getTotal(),
+            change: paymentMethod === 'cash' ? getChange() : 0
+          },
+          total: getTotal(),
+          status: 'completed',
+          notes: orderNotes
+        };
+
+        if (onOrderComplete) {
+          onOrderComplete(completedOrder);
+        }
+
+        alert(
+          `✅ Order completed successfully!\n\n` +
+          `Order ID: ${response.data.orderNumber}\n` +
+          `Total: ₱${getTotal().toLocaleString()}\n` +
+          (paymentMethod === 'cash' ? `Change: ₱${getChange().toLocaleString()}` : '')
+        );
+        
+        await refreshInventory();
+
+        setCartItems([]);
+        setPaymentMethod('cash');
+        setAmountReceived(0);
+        setOrderNotes('');
+      }
+    } catch (error) {
+      console.error('Error creating order:', error);
+      alert(`Failed to create order: ${error.response?.data?.error || error.message}`);
     }
-  })
-  .catch(error => {
-    // Handle network/server error
-    console.error('Network/server error:', error);
-  });
-    
+  };
 
-    // Pass the order to parent component
-    if (onOrderComplete) {
-      onOrderComplete(newOrder);
-    }
+  if (isLoading) {
+    return (
+      <div className="min-vh-100 d-flex align-items-center justify-content-center" style={{background: '#f8f9fa'}}>
+        <div className="text-center">
+          <i className="fas fa-sync fa-spin display-1 text-primary mb-3"></i>
+          <h3>Loading POS System...</h3>
+        </div>
+      </div>
+    );
+  }
 
-    console.log('In-Store Order Created:', newOrder);
-    alert(`Order completed successfully! ${paymentMethod === 'cash' ? `Change: ₱${getChange().toLocaleString()}` : ''}`);
-    
-    // Handle payment recording
-    handlePayment(user?.id, getTotal());
+  if (error) {
+    return (
+      <div className="min-vh-100 d-flex align-items-center justify-content-center" style={{background: '#f8f9fa'}}>
+        <div className="alert alert-danger">
+          <i className="fas fa-exclamation-triangle me-2"></i>
+          Error loading products: {error}
+        </div>
+      </div>
+    );
+  }
 
-    // Reset form
-    setCartItems([]);
-    setPaymentMethod('cash');
-    setAmountReceived(0);
-    setOrderNotes('');
-};
-
-  // Show if no products available
   if (availableProducts.length === 0) {
     return (
-      <div className="container-fluid bg-light min-vh-100">
-        <div className="container py-4">
-          <div className="row">
-            <div className="col-12 text-center py-5">
-              <div className="card border-0 shadow-sm">
-                <div className="card-body py-5">
-                  <i className="fas fa-box-open display-1 text-muted mb-4"></i>
-                  <h2>No Products Available</h2>
-                  <p className="text-muted">No products are currently in stock or available for sale.</p>
-                </div>
-              </div>
-            </div>
-          </div>
+      <div className="min-vh-100 d-flex align-items-center justify-content-center" style={{background: '#f8f9fa'}}>
+        <div className="text-center">
+          <i className="fas fa-box-open display-1 text-muted mb-4"></i>
+          <h2>No Products Available</h2>
+          <p className="text-muted">No products are currently in stock.</p>
         </div>
       </div>
     );
@@ -266,70 +253,91 @@ function CreateOrder({ user, onOrderComplete }) {
               <div className="col-lg-8 col-md-7 mb-3">
                 <div className="card h-100 border-0 shadow-sm">
                   <div className="card-header bg-primary text-white py-2">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <h5 className="mb-0">
-                        <i className="fas fa-box me-2"></i>Product Selection
-                      </h5>
-                      <div className="d-flex gap-2">
-                        <select 
-                          className="form-select form-select-sm"
-                          value={categoryFilter}
-                          onChange={(e) => setCategoryFilter(e.target.value)}
-                          style={{width: 'auto'}}
-                        >
-                          <option value="all">All Categories</option>
+                    <div className="d-flex justify-content-between align-items-start gap-2">
+                      <div className="d-flex flex-column gap-2 flex-grow-1">
+                        <h5 className="mb-0">
+                          <i className="fas fa-box me-2"></i>Product Selection
+                        </h5>
+                        <div className="d-flex gap-2 flex-wrap">
+                          <button 
+                            className={`btn btn-sm ${categoryFilter === 'all' ? 'btn-light' : 'btn-outline-light'}`}
+                            onClick={() => setCategoryFilter('all')}
+                          >
+                            All Categories
+                          </button>
                           {categories.map(cat => (
-                            <option key={cat} value={cat}>
+                            <button 
+                              key={cat}
+                              className={`btn btn-sm ${categoryFilter === cat ? 'btn-light' : 'btn-outline-light'}`}
+                              onClick={() => setCategoryFilter(cat)}
+                            >
                               {cat.charAt(0).toUpperCase() + cat.slice(1)}
-                            </option>
+                            </button>
                           ))}
-                        </select>
+                        <div>
+                          <input
+                            type="text"
+                            className="form-control form-control-sm"
+                            placeholder="Search by product name"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{maxWidth: '300px'}}
+                          />
+                        </div>
+                        </div>
+                        
                       </div>
                     </div>
                   </div>
-                  <div className="card-body p-3">
+                  <div className="card-body p-2" style={{maxHeight: '500px', overflowY: 'auto'}}>
                     {filteredProducts.length === 0 ? (
                       <div className="text-center py-4">
                         <i className="fas fa-search display-4 text-muted mb-3"></i>
                         <p className="text-muted">No products found in this category.</p>
                       </div>
+                    ) : searchFilteredProducts.length === 0 ? (
+                      <div className="text-center py-4">
+                        <i className="fas fa-box-open display-4 text-muted mb-3"></i>
+                        <p className="text-muted">No products match your search.</p>
+                      </div>
                     ) : (
-                      <div className="row g-3">
-                        {filteredProducts.map(product => (
-                          <div key={product.id} className="col-md-4 col-sm-6">
-                            <div className="card h-100 shadow-sm product-card" style={{transition: 'transform 0.2s'}}
-                                 onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
-                                 onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}>
-                              <div className="position-relative">
-                                <img 
-                                  src={product.image} 
-                                  className="card-img-top" 
-                                  alt={product.name}
-                                  style={{height: '120px', objectFit: 'cover'}}
-                                />
+                      <div className="row g-2">
+                        {searchFilteredProducts.map(product => (
+                          <div key={product.id} className="col-lg-3 col-md-4 col-sm-6">
+                            <div 
+                              className="card h-100 shadow-sm product-card" 
+                              style={{transition: 'transform 0.2s', cursor: 'pointer', minHeight: '140px'}}
+                              onClick={() => addToCart(product)}
+                              onMouseEnter={(e) => e.currentTarget.style.transform = 'translateY(-2px)'}
+                              onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
+                            >
                                 {product.stock <= 5 && (
-                                  <span className="position-absolute top-0 end-0 badge bg-warning">
+                                  <span className="position-absolute top-0 end-0 badge bg-warning m-1" style={{fontSize: '0.65rem'}}>
                                     Low Stock
                                   </span>
                                 )}
-                              </div>
+                                {product.reservedStock > 0 && product.stock <= 10 && (
+                                  <span className="position-absolute top-0 start-0 badge bg-info m-1" style={{fontSize: '0.65rem'}}>
+                                    <i className="fas fa-lock me-1"></i>
+                                    {product.reservedStock}
+                                  </span>
+                                )}
                               <div className="card-body p-2">
-                                <h6 className="card-title text-truncate mb-2" style={{fontSize: '0.9rem'}}>
+                                <h6 className="card-title mb-2">
                                   {product.displayName}
                                 </h6>
                                 <div className="mb-2">
                                   <span className="text-primary fw-bold">₱{product.price.toLocaleString()}</span>
                                 </div>
-                                <small className="text-muted d-block mb-2">Stock: {product.stock}</small>
-                                <div className="d-grid">
-                                  <button 
-                                    className="btn btn-primary btn-sm"
-                                    onClick={() => addToCart(product)}
-                                    disabled={product.stock === 0}
-                                  >
-                                    <i className="fas fa-plus me-1"></i>Add to Cart
-                                  </button>
-                                </div>
+                                <small className="text-muted d-block">
+                                  Available: {product.stock}
+                                  {product.reservedStock > 0 && (
+                                    <span className="text-warning d-block" style={{fontSize: '0.7rem'}}>
+                                      <i className="fas fa-lock me-1"></i>
+                                      {product.reservedStock} reserved
+                                    </span>
+                                  )}
+                                </small>
                               </div>
                             </div>
                           </div>
@@ -339,35 +347,26 @@ function CreateOrder({ user, onOrderComplete }) {
                   </div>
                 </div>
               </div>
-              {/* Customer Information & Order Details */}
+
+              {/* Order Summary */}
               <div className="col-lg-4 col-md-5 mb-3">
                 <div className="card h-100 border-0 shadow-sm">
                   <div className="card-header bg-primary text-white py-2">
                     <h5 className="mb-0">
-                      <i className="fas fa-user me-2"></i>Product Transaction
+                      <i className="fas fa-shopping-cart me-2"></i>Order Summary
+                      <span className="badge bg-white text-primary ms-2">{cartItems.length}</span>
                     </h5>
                   </div>
                   <div className="card-body p-3">
-                    <h6 className="mb-3">
-                      <i className="fas fa-shopping-cart me-2"></i>Items
-                      <span className="badge bg-primary ms-2">{cartItems.length}</span>
-                    </h6>
-
-                    <div className="mb-3" style={{maxHeight: '200px', overflowY: 'auto'}}>
+                    <div className="mb-3" style={{maxHeight: '400px', overflowY: 'auto'}}>
                       {cartItems.length === 0 ? (
-                        <div className="text-center py-3">
+                        <div className="text-center py-5">
                           <i className="fas fa-shopping-cart display-6 text-muted mb-2"></i>
-                          <p className="text-muted small">No items in list</p>
+                          <p className="text-muted small">No items in order</p>
                         </div>
                       ) : (
                         cartItems.map(item => (
                           <div key={item.id} className="d-flex align-items-center border-bottom py-2">
-                            <img 
-                              src={item.image} 
-                              alt={item.name}
-                              className="rounded me-2" 
-                              style={{ width: '30px', height: '30px', objectFit: 'cover' }}
-                            />
                             <div className="flex-grow-1">
                               <div className="small fw-bold">{item.displayName}</div>
                               <div className="small text-muted">₱{item.price.toLocaleString()}</div>
@@ -403,65 +402,63 @@ function CreateOrder({ user, onOrderComplete }) {
 
                     <hr />
 
+                    {paymentMethod === 'cash' && (
+                      <div className="mb-3">
+                        <label className="form-label small fw-bold">Amount Received</label>
+                        <input 
+                          type="number" 
+                          className="form-control form-control-sm"
+                          value={amountReceived}
+                          onChange={(e) => setAmountReceived(parseFloat(e.target.value) || 0)}
+                          placeholder="0.00"
+                        />
+                        <div className="small mt-2">
+                          <div>Change: <span className="fw-bold text-success">₱{getChange().toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="mb-3">
-                      <label className="form-label">Payment Method</label>
+                      <label className="form-label small fw-bold">Payment Method</label>
                       <select 
-                        className="form-control form-control-sm"
+                        className="form-select form-select-sm"
                         value={paymentMethod}
                         onChange={(e) => setPaymentMethod(e.target.value)}
                       >
                         <option value="cash">Cash</option>
+                        <option value="card">Card</option>
                         <option value="gcash">GCash</option>
-                        <option value="card">Bank Transfer</option>
                       </select>
                     </div>
-                    {/* Payment Calculation Section */}
+
+                    <div className="mb-3">
+                      <label className="form-label small fw-bold">Order Notes (Optional)</label>
+                      <textarea 
+                        className="form-control form-control-sm"
+                        rows="2"
+                        value={orderNotes}
+                        onChange={(e) => setOrderNotes(e.target.value)}
+                        placeholder="Add any special instructions..."
+                      />
+                    </div>
+
                     <div className="border-top pt-3">
-                      <div className="mb-3">
-                        <div className="d-flex justify-content-between align-items-center mb-2">
-                          <span className="small fw-semibold">Total Amount:</span>
-                          <span className="small fw-bold text-primary">₱{getTotal().toLocaleString()}</span>
-                        </div>
-                        
-                        {paymentMethod === 'cash' && (
-                          <>
-                            <div className="d-flex justify-content-between align-items-center mb-2">
-                              <label className="small fw-semibold mb-0">Amount Received:</label>
-                              <input 
-                                type="number" 
-                                className="form-control form-control-sm"
-                                placeholder="0.00"
-                                value={amountReceived}
-                                onChange={(e) => setAmountReceived(Number(e.target.value) || 0)}
-                                min="0"
-                                step="0.01"
-                                style={{ width: '120px' }}
-                              />
-                              <span className="small fw-semibold">Change:</span>
-                              <span className={`small fw-bold ${getChange() < 0 ? 'text-danger' : 'text-primary'}`}>
-                                ₱{getChange().toLocaleString()}
-                              </span>
-                            </div>
-                            {getChange() < 0 && (
-                              <small className="text-danger">
-                                <i className="fas fa-exclamation-triangle me-1"></i>
-                                Insufficient amount received
-                              </small>
-                            )}
-                          </>
-                        )}
+                      <div className="d-flex justify-content-between align-items-center mb-3">
+                        <span className="h5 mb-0">Total:</span>
+                        <span className="h4 mb-0 text-primary fw-bold">₱{getTotal().toLocaleString()}</span>
                       </div>
+
                       <button 
                         className="btn btn-primary w-100"
                         onClick={handleSubmit}
-                        disabled={cartItems.length === 0 || (paymentMethod === 'cash' && getChange() < 0)}
+                        disabled={cartItems.length === 0}
                       >
                         <i className="fas fa-check me-2"></i>Complete Order
                       </button>
                     </div>
                   </div>
                   <div className="card-footer text-muted text-center bg-light border-0 py-2">
-                    <small>Order processed by {user?.name || 'Cashier'}</small>
+                    <small>Order processed by {user?.fullname || user?.name || 'Cashier'}</small>
                   </div>
                 </div>
               </div>

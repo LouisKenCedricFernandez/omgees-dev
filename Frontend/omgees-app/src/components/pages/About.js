@@ -2,25 +2,20 @@ import React from 'react';
 
 function About() {
     return (
-        <section className="section">
-            <div className="container-fluid">
+            <div className="container-fluid px-2 px-md-3">
                 <div className="row">
-                    <div className="col-md-10 text-center">
+                    <div className="col-12 text-center">
                         <h3 className="main-home">Welcome to OMGees' Official Website!</h3>
-                            <div className="underline mx-auto"></div> 
-                            <p>Nulla amet commodo esse est culpa adipisicing. 
-                                Est magna incididunt anim sint minim sunt sint amet officia cupidatat. 
-                                Esse ullamco cupidatat ad labore ipsum cillum quis eu eu exercitation. 
-                                Ad sit ex irure sit. Eu cupidatat mollit reprehenderit laborum magna Lorem.
-                                Consectetur labore commodo sunt reprehenderit est. 
-                                Duis eu veniam ipsum veniam laborum commodo nulla eu laboris reprehenderit officia culpa exercitation exercitation. 
-                                Amet fugiat nulla ad cillum cillum cupidatat do culpa quis cillum sit. 
-                                Nostrud sint amet irure eu dolor.
-                            </p>
+                            <div className="underline mx-auto" style={{ width: '1100px', maxWidth: '100%' }}></div> 
+                            <div className="mx-auto" style={{ width: '1100px', maxWidth: '100%' }}>
+                                <p className="text-secondary" style={{ fontSize: '1rem', lineHeight: '1.8', fontWeight: '400' }}>
+                                    More than just a store, OMGees is a growing community where creativity and craftsmanship come together. 
+                                    Whether you're a weekend baker experimenting with new recipes or a café owner creating treats for your customers, we're here to support your baking journey with quality, convenience, and expert guidance.
+                                </p>
+                            </div>
                     </div>
                 </div> 
             </div>  
-        </section>
     );
 }
 

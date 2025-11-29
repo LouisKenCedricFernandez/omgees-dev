@@ -1,6 +1,9 @@
-import React, {useState} from 'react';
+import React from 'react';
+import { useState } from 'react';
 import './App.css';
 import { AuthProvider, useAuth } from './Authentication';
+import LandingPage from './components/inc/LandingPage';
+import PublicNavbar from './components/inc/PublicNavbar';
 import UserLogin from './UserLogin';
 import UserRegister from './UserRegister';
 import AdminNavbar from './components/inc/AdminNavbar';
@@ -9,10 +12,12 @@ import InventoryNavbar from './components/inc/InventoryNavbar';
 import Logs from './components/pages/admin/Logs';
 import Details from './components/pages/admin/Details';
 import Reports from './components/pages/admin/Reports';
-import Maintenance from './components/pages/admin/Maintenance';
+import UserMaintenance from './components/pages/admin/maintenance/UserMaintenance';
+import ProductMaintenance from './components/pages/admin/maintenance/ProductMaintenance';
+import SupplierMaintenance from './components/pages/admin/maintenance/SupplierMaintenance';
 import Navbar from './components/inc/Navbar';
 import Home from './components/pages/Home';
-import Profile from './components/pages/Profile';
+import TrackOrder from './components/pages/TrackOrder';
 import Contact from './components/pages/Contact';
 import Checkout from './components/pages/Checkout';
 import Ingredients from './components/pages/products/Ingredients';
@@ -21,7 +26,9 @@ import Packaging from './components/pages/products/Packaging';
 import Dashboard from './components/pages/admin/Dashboard';
 import CreateOrder from './components/pages/cashier-staff/CreateOrder';
 import ManageOrder from './components/pages/cashier-staff/ManageOrder';
+import OrderDelivery from './components/pages/cashier-staff/OrderDelivery';
 import ManageInventory from './components/pages/inventory-staff/ManageInventory';
+import DeliverInventory from './components/pages/inventory-staff/DeliverInventory'; 
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 
 function AppContent() {
@@ -29,6 +36,7 @@ function AppContent() {
   const [cartItems, setCartItems] = useState([]);
   const [orders, setOrders] = useState([]);
   const [currentInventory, setCurrentInventory] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
   
   // MINIMAL monitoring - only add if admin exists
   const [activities, setActivities] = useState([]);
@@ -227,7 +235,7 @@ const logActivity = (activity) => {
     
     setOrders(updatedOrders);
     
-    // FIXED: Also update allTransactions to reflect the status changes
+    // update all transactions to reflect the status changes
     setAllTransactions(prevTransactions => 
       prevTransactions.map(transaction => {
         const updatedOrder = updatedOrders.find(order => order.orderId === transaction.orderId);
@@ -239,9 +247,13 @@ const logActivity = (activity) => {
     return (
       <div className="login">
         <Routes>
+          <Route path="/home" element={<>
+            <PublicNavbar />
+            <LandingPage />
+          </>} />
           <Route path="/login" element={<UserLogin />} />
           <Route path="/login/register" element={<UserRegister />} />
-          <Route path="/*" element={<Navigate to="/login" replace />} />
+          <Route path="/*" element={<Navigate to="/home" replace />} />
         </Routes>
       </div>
     );
@@ -250,7 +262,7 @@ const logActivity = (activity) => {
   return (
     <div className="App">
       {isAdmin ? (
-        <div className="admin-section">
+        <div className="admin-section ">
           <AdminNavbar user={currentUser} onLogout={logout} />
           <div className="admin-content" style={{ paddingTop: '70px' }}>
             <Routes>
@@ -285,7 +297,9 @@ const logActivity = (activity) => {
                   />
                 } 
               />
-              <Route path="/admin/maintenance" element={<Maintenance/>} />
+              <Route path="/admin/maintenance/users" element={<UserMaintenance/>} />
+              <Route path="/admin/maintenance/products" element={<ProductMaintenance/>} />
+              <Route path="/admin/maintenance/suppliers" element={<SupplierMaintenance/>} />
               <Route path="/*" element={<Navigate to="/admin/dashboard" replace />} />
             </Routes>
           </div>
@@ -315,6 +329,14 @@ const logActivity = (activity) => {
                   />
                 } 
               />
+              <Route 
+                path="/cashier/delivery" 
+                element={
+                  <OrderDelivery 
+                    user={currentUser}
+                  />
+                } 
+              />
               <Route path="/*" element={<Navigate to="/cashier/create-orders" replace />} />
             </Routes>
           </div>
@@ -331,7 +353,18 @@ const logActivity = (activity) => {
                     user={currentUser}
                     onInventoryUpdate={handleInventoryUpdate}
                     initialInventory={currentInventory}
-                    onInitialLoad={setCurrentInventory} // Add this new prop
+                    onInitialLoad={setCurrentInventory}
+                  />
+                } 
+              />
+              <Route 
+                path="/inventory/delivery" 
+                element={
+                  <DeliverInventory 
+                    user={currentUser}
+                    onInventoryUpdate={handleInventoryUpdate}
+                    initialInventory={currentInventory}
+                    onInitialLoad={setCurrentInventory}
                   />
                 } 
               />
@@ -341,10 +374,19 @@ const logActivity = (activity) => {
         </div>
       ) : isCustomer ? (
         <div className="customer-section">
-          <Navbar user={currentUser} onLogout={logout} cartItems={cartItems} onUpdateCart={handleUpdateCart} />
+          <Navbar 
+            user={currentUser} 
+            onLogout={logout} 
+            cartItems={cartItems} 
+            onUpdateCart={handleUpdateCart}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+          />
+          <div className="customer-content" style={{ paddingTop: '70px' }}>
           <Routes>
-            <Route path="/" element={<Home user={currentUser} onLogout={logout} />} />
-            <Route path="/profile" element={<Profile user={currentUser} orders={orders} onOrderUpdate={handleOrderStatusUpdate} />} />
+            <Route path="/" element={<Home user={currentUser} onLogout={logout} cartItems={cartItems} onUpdateCart={handleUpdateCart} searchQuery={searchQuery}/>}/>
+            <Route path="/products/*" element={<Home user={currentUser} onLogout={logout} cartItems={cartItems} onUpdateCart={handleUpdateCart} searchQuery={searchQuery}/>} />
+            <Route path="/track-order" element={<TrackOrder user={currentUser} orders={orders} onOrderUpdate={handleOrderStatusUpdate} />} />
             <Route 
               path="/checkout" 
               element={
@@ -369,6 +411,7 @@ const logActivity = (activity) => {
                       item.status === 'active'
                     )
                   )}
+                  searchQuery={searchQuery}
                 />
               } 
             />
@@ -385,6 +428,7 @@ const logActivity = (activity) => {
                       item.status === 'active'
                     )
                   )}
+                  searchQuery={searchQuery}
                 />
               } 
             />
@@ -401,12 +445,14 @@ const logActivity = (activity) => {
                       item.status === 'active'
                     )
                   )}
+                  searchQuery={searchQuery}
                 />
               } 
             />
             <Route path="/*" element={<Navigate to="/" replace />} />
           </Routes>
           <Contact />
+          </div>
         </div>
       ) : (
         <div className="container py-5">

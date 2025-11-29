@@ -1,54 +1,64 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState, useMemo } from 'react';
+import useInventory from '../../../components/hooks/useInventory';
 
-function Tools({ cartItems = [], onUpdateCart }) {
-  const [products, setProducts] = useState([]);
+function Tools({ cartItems = [], onUpdateCart, searchQuery = '' }) {
+  const { inventory, isLoading, error } = useInventory(true);
+  
   const [displayedProducts, setDisplayedProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedVariant, setSelectedVariant] = useState(null);
   const [showModal, setShowModal] = useState(false);
 
-  useEffect(() => {
-    axios.get('http://localhost:5000/tools')
-      .then(res => {
-        if (Array.isArray(res.data)) {
-          // Normalize backend fields to frontend fields
-          const normalized = res.data.map(product => ({
-            id: product.product_id,
-            name: product.product_name,
-            price: product.product_price ?? 0,
-            count: product.product_totalstock ?? 0,
-            sold: product.product_totalsold ?? 0,
-            image: product.image ?? "https://via.placeholder.com/150",
-            description: product.product_description ?? "",
-            variants: [
-              {
-                id: product.product_id,
-                size: product.product_variant ?? "Default",
-                price: product.product_price ?? 0,
-                count: product.product_totalstock ?? 0,
-              }
-            ]
-          }));
-          setProducts(normalized);
-          setDisplayedProducts(normalized.slice(0, 6));
-        }
-      })
-      .catch(err => {
-        console.error('Failed to load tools:', err);
-      });
-  }, []);
-  // Load more products in increments of 3
+  const products = useMemo(() => {
+    return inventory
+      .filter(item => 
+        (item.status === 'In Stock' || item.status === 'active') && 
+        item.stock > 0 &&
+        item.category === 'tools'
+      )
+      .map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        count: item.stock,
+        sold: item.sold,
+        image: item.image,
+        description: item.description,
+        variants: [
+          {
+            id: item.id,
+            size: item.size || item.variant || "Default",
+            price: item.price,
+            count: item.stock,
+          }
+        ]
+      }));
+  }, [inventory]);
+
+  // Filter products based on search query
+  const filteredProducts = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return products;
+    }
+    return products.filter(product =>
+      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (product.description && product.description.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+  }, [products, searchQuery]);
+
+  React.useEffect(() => {
+    setDisplayedProducts(filteredProducts.slice(0, 6));
+  }, [filteredProducts]);
 
   const loadMoreProducts = () => {
     const currentCount = displayedProducts.length;
-    const nextProducts = products.slice(currentCount, currentCount + 3);
+    const nextProducts = filteredProducts.slice(currentCount, currentCount + 3);
     setDisplayedProducts([...displayedProducts, ...nextProducts]);
   };
 
   const openProductModal = (product) => {
     setSelectedProduct(product);
-    setSelectedVariant(product.variants[0]); // Set default variant
+    setSelectedVariant(product.variants[0]); 
     setShowModal(true);
   };
 
@@ -63,58 +73,114 @@ function Tools({ cartItems = [], onUpdateCart }) {
   };
 
   const addToCart = (product, variant = null) => {
-    const productToAdd = variant ? 
-      { ...product, selectedVariant: variant, price: variant.price, count: variant.count, displayName: `${product.name} (${variant.size})` } :
-      product;
+    // Helper to find if item already exists
+    const findCartItem = (productId, variantId) => {
+      return cartItems.find(item => {
+        const itemVariantId = item.selectedVariant?.id;
+        return item.id === productId && 
+              (variantId ? itemVariantId === variantId : !item.selectedVariant);
+      });
+    };
+
+    const variantId = variant?.id;
+    const existingItem = findCartItem(product.id, variantId);
     
-    const existingItem = cartItems.find(item => 
-      item.id === product.id && 
-      (variant ? item.selectedVariant?.id === variant.id : !item.selectedVariant)
-    );
-    
-    // Check stock availability
+    // Get available stock
     const availableStock = variant ? variant.count : product.count;
     const currentCartQuantity = existingItem ? existingItem.quantity : 0;
     
+    // Check stock availability
     if (currentCartQuantity >= availableStock) {
-      alert('Insufficient stock available');
+      alert('❌ Insufficient stock available');
       return;
     }
     
     let updatedCart;
+    
     if (existingItem) {
-      updatedCart = cartItems.map(item => 
-        (item.id === product.id && 
-         (variant ? item.selectedVariant?.id === variant.id : !item.selectedVariant))
-          ? { ...item, quantity: item.quantity + 1 }
-          : item
-      );
+      // Item exists - increment quantity
+      updatedCart = cartItems.map(item => {
+        const itemVariantId = item.selectedVariant?.id;
+        if (item.id === product.id && 
+            (variantId ? itemVariantId === variantId : !item.selectedVariant)) {
+          return { ...item, quantity: item.quantity + 1 };
+        }
+        return item;
+      });
+      
+      const itemName = variant ? `${product.name} (${variant.size})` : product.name;
+      alert(`✅ Quantity updated for ${itemName}!`);
+      
     } else {
+      // New item - add to cart
+      const productToAdd = variant ? 
+        { 
+          ...product, 
+          selectedVariant: variant, 
+          price: variant.price, 
+          count: variant.count, 
+          displayName: `${product.name} (${variant.size})` 
+        } : 
+        product;
+      
       updatedCart = [...cartItems, { ...productToAdd, quantity: 1 }];
+      
+      const itemName = variant ? `${product.name} (${variant.size})` : product.name;
+      alert(`✅ ${itemName} added to cart!`);
     }
     
-    // Use the parent's update function
     if (onUpdateCart) {
       onUpdateCart(updatedCart);
     }
-    
-    const itemName = variant ? `${product.name} (${variant.size})` : product.name;
-    alert(`${itemName} added to cart!`);
   };
+  const hasMoreProducts = displayedProducts.length < filteredProducts.length;
 
-  const hasMoreProducts = displayedProducts.length < products.length;
-
-  // Show message if no products available
-  if (products.length === 0) {
+  if (isLoading) {
     return (
-      <div className="container-fluid py-4 px-4" style={{backgroundColor: '#f8f9fa'}}>
+      <div className="container py-3">
+        <div className="row">
+          <div className="col-12 text-center py-5">
+            <div className="card border-0 shadow-sm">
+              <div className="card-body py-5">
+                <i className="fas fa-sync fa-spin display-1 text-primary mb-4"></i>
+                <h2>Loading Tools...</h2>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="container py-3">
+        <div className="row">
+          <div className="col-12 text-center py-5">
+            <div className="alert alert-danger">
+              <i className="fas fa-exclamation-triangle me-2"></i>
+              Error loading tools: {error}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (filteredProducts.length === 0) {
+    return (
+      <div className="container py-3">
         <div className="row">
           <div className="col-12 text-center py-5">
             <div className="card border-0 shadow-sm">
               <div className="card-body py-5">
                 <i className="fas fa-tools display-1 text-muted mb-4"></i>
-                <h2>No Tools Available</h2>
-                <p className="text-muted">Check back later for new products.</p>
+                <h2>
+                  {searchQuery ? `No Tools Found for "${searchQuery}"` : 'No Tools Available'}
+                </h2>
+                <p className="text-muted">
+                  {searchQuery ? 'Try a different search term' : 'Check back later for new products.'}
+                </p>
               </div>
             </div>
           </div>
@@ -124,25 +190,20 @@ function Tools({ cartItems = [], onUpdateCart }) {
   }
 
   return (
-    <div className="container-fluid py-4 px-4" style={{backgroundColor: '#f8f9fa'}}>
+    <div className="container py-3">
+      {/* Search Query Display */}
+      {searchQuery && (
+        <div className="alert alert-info mb-3" role="alert">
+          <i className="fas fa-search me-2"></i>
+          Showing results for: <strong>"{searchQuery}"</strong>
+          <span className="ms-2 text-muted">({filteredProducts.length} found)</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="row mb-4">
         <div className="col-12">
-          <h2 className="mb-3">
-            Tools & Equipment
-            {cartItems.length > 0 && (
-              <span className="badge bg-primary ms-2">{cartItems.reduce((sum, item) => sum + item.quantity, 0)}</span>
-            )}
-          </h2>
-          <div className="d-flex justify-content-between align-items-center">
-            <p className="text-muted mb-0">{displayedProducts.length} of {products.length} products shown</p>
-            <div className="d-flex gap-2">
-              <select className="form-select form-select-sm" style={{width: 'auto'}}>
-                <option>Price: Low to High</option>
-                <option>Price: High to Low</option>
-              </select>
-            </div>
-          </div>
+          <h2 className="mb-3">Tools & Equipment</h2>
         </div>
       </div>
 
@@ -155,7 +216,6 @@ function Tools({ cartItems = [], onUpdateCart }) {
                  onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}
                  onClick={() => openProductModal(product)}>
               
-              {/* Product Image */}
               <div className="position-relative">
                 <img 
                   src={product.image} 
@@ -171,23 +231,18 @@ function Tools({ cartItems = [], onUpdateCart }) {
               </div>
 
               <div className="card-body p-2">
-                {/* Product Name */}
                 <h6 className="card-title text-truncate mb-2" style={{fontSize: '0.85rem'}}>
                   {product.name}
                 </h6>
 
-                {/* Price */}
                 <div className="mb-2">
                   <span className="text-primary fw-bold">₱{product.price.toLocaleString()}</span>
                 </div>
 
-                {/* Sold Count */}
                 <small className="text-muted d-block mb-2">{product.sold} sold</small>
 
-                {/* Available Count */}
                 <small className="text-muted d-block mb-2">{product.count} available</small>
 
-                {/* Action Buttons */}
                 <div className="d-grid gap-1">
                   <button 
                     className="btn btn-outline-primary btn-sm"
@@ -215,7 +270,7 @@ function Tools({ cartItems = [], onUpdateCart }) {
               className="btn btn-outline-secondary btn-lg px-5"
               onClick={loadMoreProducts}
             >
-              <i className="fas fa-plus-circle me-2"></i>Load More Products ({products.length - displayedProducts.length} remaining)
+              <i className="fas fa-plus-circle me-2"></i>Load More Products ({filteredProducts.length - displayedProducts.length} remaining)
             </button>
           </div>
         </div>
@@ -248,7 +303,6 @@ function Tools({ cartItems = [], onUpdateCart }) {
                       <h4 className="text-primary">₱{selectedVariant.price.toLocaleString()}</h4>
                     </div>
 
-                    {/* Variant Selection */}
                     <div className="mb-3">
                       <h6>Size Options</h6>
                       <div className="d-flex flex-wrap gap-2">

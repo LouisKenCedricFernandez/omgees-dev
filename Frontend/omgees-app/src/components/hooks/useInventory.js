@@ -1,117 +1,143 @@
+import { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
 
-//dito na nakalagay yung mga props na gagamitin para sa manage inventory natin pre pwede mo rin naman tanggalin ung baseproductid
-import { useState, useCallback, useRef } from 'react';
+const useInventory = (autoFetch = true) => {
+  const [inventory, setInventory] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-export const useInventory = (initialInventory = []) => {
-  const [inventory, setInventory] = useState(initialInventory);
-  const hasInitialized = useRef(false);
+  // Normalize product data from backend to frontend format
+  const normalizeProduct = useCallback((product) => ({
+    id: product.product_id,
+    baseProductId: product.base_product_id ?? product.product_id ?? 0,
+    name: product.product_name ?? "",
+    category: product.product_category ?? "",
+    size: product.product_variant ?? "",
+    variant: product.product_variant ?? "",
+    image: product.product_image
+      ? `http://localhost:5000/${product.product_image.replace(/^public\//, '').replace(/^\/?uploads\//, 'uploads/')}`
+      : "https://via.placeholder.com/150",
+    description: product.product_description ?? "",
+    supplier: product.product_supplier ?? "",
+    stock: product.product_totalstock ?? 0,
+    sold: product.product_totalsold ?? 0,
+    lowStockThreshold: product.lowStockThreshold ?? 10,
+    status: product.product_status ?? "active",
+    price: product.product_price ?? 0,
+    lastRestocked: product.last_restocked ?? new Date().toISOString(),
+  }), []);
 
-  const updateInventory = useCallback((newInventory) => {
-    setInventory(newInventory);
-    hasInitialized.current = true;
+  // Fetch inventory from backend
+  const fetchInventory = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const response = await axios.get('http://localhost:5000/inventory');
+      console.log('Fetched inventory:', response.data);
+      
+      if (response.data && Array.isArray(response.data)) {
+        const normalized = response.data.map(normalizeProduct);
+        setInventory(normalized);
+        return normalized;
+      }
+    } catch (err) {
+      console.error('Error fetching inventory:', err);
+      setError(err.message || 'Failed to fetch inventory');
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [normalizeProduct]);
+
+  // Refresh inventory (alias for fetchInventory for clarity)
+  const refreshInventory = useCallback(() => {
+    return fetchInventory();
+  }, [fetchInventory]);
+
+  // Update local inventory state
+  const updateInventory = useCallback((updatedInventory) => {
+    setInventory(updatedInventory);
   }, []);
 
+  // Update a single product in the inventory
+  const updateProduct = useCallback((productId, updates) => {
+    setInventory(prev => 
+      prev.map(product => 
+        product.id === productId 
+          ? { ...product, ...updates }
+          : product
+      )
+    );
+  }, []);
+
+  // Add a new product to inventory
   const addProduct = useCallback((newProduct) => {
-    const baseId = newProduct.baseProductId || Math.max(...inventory.map(p => p.baseProductId || 0), 0) + 1;
-    const existingVariants = inventory.filter(p => p.baseProductId === baseId);
-    const newId = baseId * 1000 + existingVariants.length + 1;
+    setInventory(prev => [...prev, normalizeProduct(newProduct)]);
+  }, [normalizeProduct]);
 
-    const productWithId = {
-      ...newProduct,
-      id: newId,
-      baseProductId: baseId,
-      status: 'active',
-      lastRestocked: new Date().toISOString(),
-      sold: 0
-    };
-
-    setInventory(prev => [...prev, productWithId]);
-    return productWithId;
-  }, [inventory]);
-
-  const updateProduct = useCallback((updatedProduct) => {
-    const processedData = {
-      ...updatedProduct,
-      price: Number(updatedProduct.price),
-      stock: Number(updatedProduct.stock),
-      lowStockThreshold: Number(updatedProduct.lowStockThreshold),
-      sold: Number(updatedProduct.sold)
-    };
-
-    setInventory(prev => prev.map(product => 
-      product.id === updatedProduct.id ? processedData : product
-    ));
+  // Remove a product from inventory
+  const removeProduct = useCallback((productId) => {
+    setInventory(prev => prev.filter(product => product.id !== productId));
   }, []);
 
-  const restockProduct = useCallback((productId, newStock) => {
-    setInventory(prev => prev.map(product => 
-      product.id === productId ? {
-        ...product,
-        stock: newStock,
-        lastRestocked: new Date().toISOString()
-      } : product
-    ));
-  }, []);
+  // Archive/Restore products
+  const archiveProduct = useCallback(async (productId, archiveAll = false, baseProductId = null) => {
+    try {
+      const response = await axios.put(
+        `http://localhost:5000/archive-product/${productId}`,
+        { archiveAll, baseProductId }
+      );
+      
+      if (response.data.success) {
+        await refreshInventory();
+        return response.data;
+      }
+    } catch (err) {
+      console.error('Archive error:', err);
+      throw err;
+    }
+  }, [refreshInventory]);
 
-const addVariant = useCallback((baseProductId, newVariant) => {
-  // Find all variants with the same baseProductId
-  const existingVariants = inventory.filter(p => p.baseProductId === baseProductId);
-  // Generate a new unique ID for the variant
-  const newId = baseProductId * 1000 + existingVariants.length + 1;
+  const restoreProduct = useCallback(async (productId, restoreAll = false, baseProductId = null) => {
+    try {
+      const response = await axios.put(
+        `http://localhost:5000/restore-product/${productId}`,
+        { restoreAll, baseProductId }
+      );
+      
+      if (response.data.success) {
+        await refreshInventory();
+        return response.data;
+      }
+    } catch (err) {
+      console.error('Restore error:', err);
+      throw err;
+    }
+  }, [refreshInventory]);
 
-  const variantWithId = {
-    ...newVariant,
-    id: newId,
-    baseProductId,
-    status: 'active',
-    lastRestocked: new Date().toISOString(),
-    sold: 0
-  };
-
-  setInventory(prev => [...prev, variantWithId]);
-  return variantWithId;
-  }, [inventory]);
-
-  const updateVariant = useCallback((variantId, updatedVariant) => {
-    setInventory(prev =>
-      prev.map(variant =>
-        variant.id === variantId
-          ? {
-              ...variant,
-              ...updatedVariant,
-              price: Number(updatedVariant.price),
-              stock: Number(updatedVariant.stock),
-              lowStockThreshold: Number(updatedVariant.lowStockThreshold),
-              sold: Number(updatedVariant.sold)
-            }
-          : variant
-      )
-    );
-  }, []);
-
-  const restockVariant = useCallback((variantId, newStock) => {
-    setInventory(prev =>
-      prev.map(variant =>
-        variant.id === variantId
-          ? {
-              ...variant,
-              stock: newStock,
-              lastRestocked: new Date().toISOString()
-            }
-          : variant
-      )
-    );
-  }, []);
+  // Auto-fetch on mount if enabled
+  useEffect(() => {
+    if (autoFetch) {
+      fetchInventory();
+    }
+  }, [autoFetch, fetchInventory]);
 
   return {
     inventory,
+    isLoading,
+    error,
+    fetchInventory,
+    refreshInventory,
     updateInventory,
-    addProduct,
     updateProduct,
-    restockProduct,
-    hasInitialized: hasInitialized.current,
-    addVariant, 
-    updateVariant, 
-    restockVariant 
+    addProduct,
+    removeProduct,
+    archiveProduct,
+    restoreProduct,
+    setInventory,
+    setError 
   };
 };
+
+export default useInventory;

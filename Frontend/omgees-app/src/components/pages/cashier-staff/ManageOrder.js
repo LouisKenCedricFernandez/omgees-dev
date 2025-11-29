@@ -9,6 +9,13 @@ function ManageOrder({ user, orders = [], onUpdateOrder }) {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const API_HOST = 'http://localhost:5000';
+
+  const getImageSrc = (img) => {
+  if (!img) return null;
+  if (typeof img === 'string' && img.startsWith('http')) return img;
+  return `${API_HOST}${img}`;
+  };
   
   // helper: always return an array for items (defensive parsing)
 const ensureItemsArray = (items) => {
@@ -64,16 +71,143 @@ const ensureItemsArray = (items) => {
 }, []);
 
 
-  const updateOrderStatus = (orderId, newStatus) => {
-    const updatedOrders = dborders.map(order => 
-      order.orderId === orderId 
-        ? { ...order, status: newStatus }
-        : order
-    );
-    if (onUpdateOrder) {
-      onUpdateOrder(updatedOrders);
+const updateOrderStatus = async (orderId, newStatus) => {
+  console.log('Updating status for:', orderId, 'to:', newStatus);
+  
+  try {
+    const orderToUpdate = dborders.find(order => order.order_id === orderId);
+    
+    if (!orderToUpdate) {
+      console.error('Order not found in local state');
+      alert('Order not found. Please refresh the page.');
+      return;
     }
-  };
+
+    console.log('Found order:', orderToUpdate.order_id, 'Current status:', orderToUpdate.status);
+
+    // FRONTEND VALIDATION for online orders
+    if (orderToUpdate.type === 'online' || orderToUpdate.orderType === 'online') {
+      // Prevent changing verified orders back to pending
+      if (orderToUpdate.status === 'verified' && newStatus === 'pending') {
+        alert('⚠️ Verified orders cannot be changed back to pending.');
+        return;
+      }
+      
+      // Prevent changing cancelled orders
+      if (orderToUpdate.status === 'cancelled' && newStatus !== 'cancelled') {
+        alert('⚠️ Cancelled orders cannot be changed.');
+        return;
+      }
+      
+      // Only allow pending → verified or cancelled
+      if (orderToUpdate.status === 'pending' && newStatus !== 'verified' && newStatus !== 'cancelled' && newStatus !== 'pending') {
+        alert('⚠️ Pending orders can only be changed to Verified or Cancelled.');
+        return;
+      }
+
+      // Confirm cancellation
+      if (newStatus === 'cancelled') {
+        const confirmCancel = window.confirm(
+          '⚠️ Are you sure you want to cancel this order?\n\n' +
+          'This action will release the reserved stock.\n' +
+          (orderToUpdate.status === 'verified' ? 'Stock will be restored to inventory.\n' : '') +
+          '\nThis action cannot be undone.'
+        );
+        if (!confirmCancel) return;
+      }
+
+      // Confirm verification
+      if (newStatus === 'verified') {
+        const confirmVerify = window.confirm(
+          '✅ Verify this order?\n\n' +
+          'Stock will be permanently deducted from inventory.\n' +
+          'Once verified, the order cannot be changed back to pending.'
+        );
+        if (!confirmVerify) return;
+      }
+    }
+    
+    const response = await axios.put(
+      `http://localhost:5000/order/${orderToUpdate.order_id}/status`, 
+      { status: newStatus }
+    );
+
+    console.log('Backend response:', response.data);
+
+    if (response.data.success) {
+      console.log('Status update successful, updating local state...');
+      
+      // Update local state immediately
+      const updatedOrders = dborders.map(order => {
+        if (order.order_id === orderToUpdate.order_id) {
+          console.log(`Updating order ${order.order_id}: ${order.status} → ${newStatus}`);
+          return { ...order, status: newStatus };
+        }
+        return order;
+      });
+      
+      setDborders(updatedOrders);
+      
+      // Update selected order if it's open
+      if (selectedOrder && selectedOrder.order_id === orderToUpdate.order_id) {
+        console.log('Updating selected order modal');
+        setSelectedOrder({ ...selectedOrder, status: newStatus });
+      }
+
+      // Verify the update by fetching fresh data
+      setTimeout(() => {
+        axios.get(`http://localhost:5000/order/${orderToUpdate.order_id}/status`)
+          .then(verifyRes => {
+            if (verifyRes.data.success) {
+              console.log('Status verified:', verifyRes.data.order.status);
+              if (verifyRes.data.order.status !== newStatus) {
+                console.error('Status mismatch detected! Refreshing...');
+                fetchOrders();
+              }
+            }
+          })
+          .catch(err => console.error('Status verification failed:', err));
+      }, 500);
+
+      const statusMessage = newStatus === 'verified' 
+        ? '✅ Order verified! Stock has been deducted from inventory.' 
+        : newStatus === 'cancelled'
+        ? '❌ Order cancelled. Reserved stock has been released.'
+        : `✅ Order status updated to ${newStatus}!`;
+
+      alert(statusMessage);
+    } else {
+      throw new Error(response.data.error || 'Update failed');
+    }
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    const errorMsg = error.response?.data?.error || error.message || 'Failed to update order status. Please try again.';
+    alert(`❌ ${errorMsg}`);
+    
+    // Refresh orders on error to ensure consistency
+    fetchOrders();
+  }
+};
+
+// ADD THIS HELPER FUNCTION
+const fetchOrders = () => {
+  axios.get('http://localhost:5000/manage-orders')
+    .then(res => {
+      const orders = res.data.map(order => ({
+        ...order,
+        orderId: order.order_id || order.orderId,
+        type: order.type || order.orderType,
+        customer: typeof order.customer === 'string' 
+          ? JSON.parse(order.customer) 
+          : order.customer,
+        items: ensureItemsArray(order.items),
+        timestamp: order.timestamp || order.date
+      }));
+      setDborders(orders);
+    })
+    .catch(err => console.error(err));
+};
+
 
   // Filter logic
   const filteredOrders = dborders.filter(order => {
@@ -96,14 +230,19 @@ const ensureItemsArray = (items) => {
 
   const getStatusBadge = (status) => {
     const statusConfig = {
-      'pending': { bg: 'warning', text: 'Pending' },
-      'processing': { bg: 'info', text: 'Processing' },
-      'ready': { bg: 'success', text: 'Ready' },
-      'completed': { bg: 'primary', text: 'Completed' },
-      'cancelled': { bg: 'danger', text: 'Cancelled' }
+      'pending': { bg: 'warning', text: 'Pending', icon: 'fa-clock' },
+      'verified': { bg: 'info', text: 'Verified', icon: 'fa-check-circle' },
+      'in-transit': { bg: 'primary', text: 'Out for Delivery', icon: 'fa-truck' },
+      'completed': { bg: 'success', text: 'Completed', icon: 'fa-check-double' },
+      'cancelled': { bg: 'danger', text: 'Rejected', icon: 'fa-times-circle' }
     };
-    const config = statusConfig[status] || { bg: 'secondary', text: status };
-    return <span className={`badge bg-${config.bg}`}>{config.text}</span>;
+    const config = statusConfig[status] || { bg: 'secondary', text: status, icon: 'fa-info-circle' };
+    return (
+      <span className={`badge bg-${config.bg}`}>
+        <i className={`fas ${config.icon} me-1`}></i>
+        {config.text}
+      </span>
+    );
   };
 
   const formatDate = (timestamp) => {
@@ -114,12 +253,67 @@ const ensureItemsArray = (items) => {
     });
   };
 
-  const getStatusCount = (status) => {
-    if (status === 'pending-processing') {
-      return filteredOrders.filter(o => ['pending', 'processing'].includes(o.status)).length;
+  const handleInvoiceDownload = async (order) => {
+  try {
+    // Show confirmation dialog
+    const shouldDownload = window.confirm(
+      `📄 Download Invoice\n\n` +
+      `Order: ${order.orderId}\n` +
+      `Customer: ${order.customer.name}\n` +
+      `Total: ₱${order.total.toLocaleString()}\n\n` +
+      `Would you like to download the invoice for this order?\n\n` +
+      `This invoice serves as proof of purchase.`
+    );
+
+    if (!shouldDownload) {
+      return;
     }
-    return filteredOrders.filter(o => o.status === status).length;
-  };
+
+    console.log('📥 Downloading invoice for order:', order.order_id);
+
+    // Show loading state
+    const loadingToast = document.createElement('div');
+    loadingToast.className = 'position-fixed top-0 start-50 translate-middle-x mt-3 alert alert-info';
+    loadingToast.style.zIndex = '9999';
+    loadingToast.innerHTML = `
+      <i class="fas fa-spinner fa-spin me-2"></i>
+      Generating invoice...
+    `;
+    document.body.appendChild(loadingToast);
+
+    // Trigger download
+    const url = `http://localhost:5000/generate-invoice/${order.order_id}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Invoice-${order.orderId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Remove loading toast after delay
+    setTimeout(() => {
+      document.body.removeChild(loadingToast);
+      
+      // Show success message
+      const successToast = document.createElement('div');
+      successToast.className = 'position-fixed top-0 start-50 translate-middle-x mt-3 alert alert-success';
+      successToast.style.zIndex = '9999';
+      successToast.innerHTML = `
+        <i class="fas fa-check-circle me-2"></i>
+        Invoice downloaded successfully!
+      `;
+      document.body.appendChild(successToast);
+      
+      setTimeout(() => {
+        document.body.removeChild(successToast);
+      }, 3000);
+    }, 2000);
+
+  } catch (error) {
+    console.error('❌ Invoice download error:', error);
+    alert(`❌ Failed to download invoice\n\n${error.message}\n\nPlease try again.`);
+  }
+}; 
 
   // Render filters
   const renderFilters = () => (
@@ -153,8 +347,7 @@ const ensureItemsArray = (items) => {
         >
           <option value="all">All Status</option>
           <option value="pending">Pending</option>
-          <option value="processing">Processing</option>
-          <option value="ready">Ready</option>
+          <option value="verified">Verified</option>
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
         </select>
@@ -181,229 +374,321 @@ const ensureItemsArray = (items) => {
     </div>
   );
 
-  const renderSummaryFooter = () => (
-    <div className="card-footer bg-light border-0">
-      <div className="row text-center">
-        <div className="col-md-2">
-          <div className="fw-semibold text-warning">{getStatusCount('pending')}</div>
-          <small className="text-muted">Pending</small>
-        </div>
-        <div className="col-md-2">
-          <div className="fw-semibold text-info">{getStatusCount('processing')}</div>
-          <small className="text-muted">Processing</small>
-        </div>
-        <div className="col-md-2">
-          <div className="fw-semibold text-success">{getStatusCount('ready')}</div>
-          <small className="text-muted">Ready</small>
-        </div>
-        <div className="col-md-2">
-          <div className="fw-semibold text-primary">{getStatusCount('completed')}</div>
-          <small className="text-muted">Completed</small>
-        </div>
-        <div className="col-md-2">
-          <div className="fw-semibold text-danger">{getStatusCount('cancelled')}</div>
-          <small className="text-muted">Cancelled</small>
-        </div>
-        <div className="col-md-2">
-          <div className="fw-semibold text-dark">{filteredOrders.length}</div>
-          <small className="text-muted">Total Shown</small>
+const OrderDetailsModal = () => {
+  if (!selectedOrder) return null;
+
+  const items = ensureItemsArray(selectedOrder.items);
+  
+  const isOnlineOrder = selectedOrder.type === 'online' || selectedOrder.orderType === 'online';
+  const currentStatus = selectedOrder.status;
+
+  return (
+    <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
+      <div className="modal-dialog modal-lg">
+        <div className="modal-content">
+          
+          {/* MODAL HEADER */}
+          <div className="modal-header">
+            <h5 className="modal-title">Order Details - {selectedOrder.orderId}</h5>
+            <button 
+              type="button" 
+              className="btn-close" 
+              onClick={() => setSelectedOrder(null)}
+            ></button>
+          </div>
+          
+          {/* MODAL BODY */}
+          <div className="modal-body">
+            
+            {/* ORDER AND CUSTOMER INFORMATION */}
+            <div className="row mb-3">
+              <div className="col-md-6">
+                <h6>Order Information</h6>
+                <table className="table table-sm">
+                  <tbody>
+                    <tr>
+                      <td><strong>Order ID:</strong></td>
+                      <td>{selectedOrder.orderId}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Type:</strong></td>
+                      <td>
+                        <span className={`badge ${selectedOrder.orderType === 'online' ? 'bg-info' : 'bg-success'}`}>
+                          {selectedOrder.orderType === 'online' ? 'Online' : 'In-Store'}
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><strong>Date:</strong></td>
+                      <td>{formatDate(selectedOrder.date)}</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Status:</strong></td>
+                      <td>{getStatusBadge(selectedOrder.status)}</td>
+                    </tr>
+                    {selectedOrder.cashierName && (
+                      <tr>
+                        <td><strong>Cashier:</strong></td>
+                        <td>{selectedOrder.cashierName}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div className="col-md-6">
+                <h6>Customer Information</h6>
+                <table className="table table-sm">
+                  <tbody>
+                    <tr>
+                      <td><strong>Name:</strong></td>
+                      <td>{selectedOrder.customer.name || selectedOrder.customer.username}</td>
+                    </tr>
+                    {selectedOrder.customer.email && (
+                      <tr>
+                        <td><strong>Email:</strong></td>
+                        <td>{selectedOrder.customer.email}</td>
+                      </tr>
+                    )}
+                    {selectedOrder.customer.phone && (
+                      <tr>
+                        <td><strong>Phone:</strong></td>
+                        <td>{selectedOrder.customer.phone}</td>
+                      </tr>
+                    )}
+                    {selectedOrder.customer.address && (
+                      <tr>
+                        <td><strong>Address:</strong></td>
+                        <td style={{maxWidth: '200px', wordBreak: 'break-word'}}>
+                          {selectedOrder.customer.address}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* ORDER ITEMS */}
+            <div className="row mb-3">
+              <div className="col-12">
+                <h6>Order Items</h6>
+                <div className="table-responsive">
+                  <table className="table table-striped table-sm">
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>Price</th>
+                        <th>Quantity</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((item, index) => (
+                        <tr key={item.id || index}>
+                          <td>{item.product_name || item.name}</td>
+                          <td>₱{Number(item.price || 0).toLocaleString()}</td>
+                          <td>{Number(item.quantity || 0)}</td>
+                          <td>₱{(Number(item.price || 0) * Number(item.quantity || 0)).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      {selectedOrder.shipping && selectedOrder.shipping.fee > 0 && (
+                        <tr>
+                          <td colSpan="3"><strong>Shipping:</strong></td>
+                          <td>₱{selectedOrder.shipping.fee.toLocaleString()}</td>
+                        </tr>
+                      )}
+                      <tr>
+                        <td colSpan="3"><strong>Total:</strong></td>
+                        <td><strong>₱{selectedOrder.total.toLocaleString()}</strong></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* SHIPPING INFORMATION */}
+            {selectedOrder.shipping && (
+              <div className="row mb-3">
+                <div className="col-12">
+                  <h6>Shipping Information</h6>
+                  <p><strong>Method:</strong> {
+                    selectedOrder.shipping.name || 
+                    (selectedOrder.shipping.method === 'customer_delivery' ? 'Customer Arranged Delivery' : 
+                     selectedOrder.shipping.method === 'pickup' ? 'Store Pickup' : selectedOrder.shipping.method)
+                  }</p>
+                  <p><strong>Estimated:</strong> {selectedOrder.shipping.estimatedDays}</p>
+                </div>
+              </div>
+            )}
+
+            {/* PAYMENT INFORMATION */}
+            <div className="row mb-3">
+              <div className="col-12">
+                <h6>Payment Information</h6>
+                <p>
+                  <strong>Method:</strong>{" "}
+                  <span className="badge bg-secondary">
+                    {(selectedOrder.payment?.method || selectedOrder.payment_method || 'cash').toUpperCase()}
+                  </span>
+                </p>
+                
+                {/* Payment Proof Display */}
+                {(selectedOrder.paymentProof || selectedOrder.payment_proof) ? (
+                  <div className="mt-3">
+                    <strong className="d-block mb-2">
+                      <i className="fas fa-receipt me-2"></i>Payment Proof:
+                    </strong>
+                    <div className="card border">
+                      <div className="card-body p-3">
+                        <div className="text-center mb-2">
+                          <img 
+                            src={getImageSrc(selectedOrder.paymentProof || selectedOrder.payment_proof)} 
+                            alt="Payment proof" 
+                            className="img-fluid rounded border shadow-sm"
+                            style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+                            onError={(e) => {
+                              e.currentTarget.src = 'https://via.placeholder.com/400x300?text=Image+Not+Found';
+                            }}
+                          />
+                        </div>
+                        <div className="d-flex gap-2 justify-content-center">
+                          <a 
+                            href={getImageSrc(selectedOrder.paymentProof || selectedOrder.payment_proof)} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-primary"
+                          >
+                            <i className="fas fa-external-link-alt me-1"></i>
+                            View Full Size
+                          </a>
+                        </div>
+                        {(selectedOrder.payment?.referenceNumber || selectedOrder.payment_reference) && (
+                          <p className="mt-2 mb-0">
+                            <strong>Reference Number:</strong>{" "}
+                            <code className="bg-light p-2 rounded">
+                              {selectedOrder.payment?.referenceNumber || selectedOrder.payment_reference}
+                            </code>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="alert alert-info mt-2 mb-0">
+                    <i className="fas fa-info-circle me-2"></i>
+                    No payment proof uploaded
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* ORDER NOTES */}
+            {selectedOrder.notes && (
+              <div className="row">
+                <div className="col-12">
+                  <h6>Order Notes</h6>
+                  <p className="text-muted">{selectedOrder.notes}</p>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* MODAL FOOTER */}
+          <div className="modal-footer">
+            
+            {/* ACTION BUTTONS SECTION */}
+            <div className="me-auto d-flex gap-2 align-items-center flex-wrap">
+              {isOnlineOrder ? (
+                <>
+                  {/* PENDING STATUS - Show Verify and Cancel Buttons */}
+                  {currentStatus === 'pending' && (
+                    <>
+                      <button 
+                        className="btn btn-success btn-sm"
+                        onClick={() => updateOrderStatus(selectedOrder.order_id, 'verified')}
+                      >
+                        <i className="fas fa-check-circle me-1"></i>
+                        Verify Order
+                      </button>
+                      <button 
+                        className="btn btn-danger btn-sm"
+                        onClick={() => updateOrderStatus(selectedOrder.order_id, 'cancelled')}
+                      >
+                        <i className="fas fa-times-circle me-1"></i>
+                        Cancel Order
+                      </button>
+                      <small className="text-muted">
+                        <i className="fas fa-lock me-1"></i>
+                        Stock is reserved
+                      </small>
+                    </>
+                  )}
+                  
+                  {/* VERIFIED STATUS - Show Badge and Cancel Button */}
+                  {currentStatus === 'verified' && (
+                    <>
+                      <div className="d-flex align-items-center gap-2">
+                        <span className="badge bg-success">
+                          <i className="fas fa-check-circle me-1"></i>
+                          Order Verified
+                        </span>
+                      </div>
+                      <small className="text-muted d-block w-100">
+                        <i className="fas fa-box me-1"></i>
+                        Stock has been deducted from inventory
+                      </small>
+                    </>
+                  )}
+                  
+                  {/* CANCELLED STATUS - Show Warning */}
+                  {currentStatus === 'cancelled' && (
+                    <div className="alert alert-danger mb-0 py-2 px-3">
+                      <i className="fas fa-ban me-2"></i>
+                      This order has been rejected and cannot be modified.
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* IN-STORE ORDERS - Show Completed Badge */
+                <div>
+                  <span className="badge bg-success">
+                    <i className="fas fa-shopping-bag me-1"></i>
+                    Completed (In-Store)
+                  </span>
+                  <small className="text-muted d-block mt-1">
+                    In-store orders are automatically completed
+                  </small>
+                </div>
+              )}
+            </div>
+            {/*\INVOICE BUTTON */}
+            <button 
+              className="btn btn-outline-primary btn-sm"
+              onClick={() => handleInvoiceDownload(selectedOrder)}
+            >
+              <i className="fas fa-file-invoice me-1"></i>
+              Download Invoice
+            </button>
+            
+            {/* CLOSE BUTTON */}
+            <button 
+              type="button" 
+              className="btn btn-secondary btn-sm" 
+              onClick={() => setSelectedOrder(null)}
+            >
+              Close
+            </button>
+          </div>
+          
         </div>
       </div>
     </div>
   );
-
-  const OrderDetailsModal = () => {
-    if (!selectedOrder) return null;
-
-    const items = ensureItemsArray(selectedOrder.items);
-
-    return (
-      <div className="modal show d-block" style={{backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1050}}>
-        <div className="modal-dialog modal-lg">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h5 className="modal-title">Order Details - {selectedOrder.orderId}</h5>
-              <button 
-                type="button" 
-                className="btn-close" 
-                onClick={() => setSelectedOrder(null)}
-              ></button>
-            </div>
-            <div className="modal-body">
-              <div className="row mb-3">
-                <div className="col-md-6">
-                  <h6>Order Information</h6>
-                  <table className="table table-sm">
-                    <tbody>
-                      <tr>
-                        <td><strong>Order ID:</strong></td>
-                        <td>{selectedOrder.orderId}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Type:</strong></td>
-                        <td>
-                          <span className={`badge ${selectedOrder.orderType === 'online' ? 'bg-info' : 'bg-success'}`}>
-                            {selectedOrder.orderType === 'online' ? 'Online' : 'In-Store'}
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><strong>Date:</strong></td>
-                        <td>{formatDate(selectedOrder.date)}</td>
-                      </tr>
-                      <tr>
-                        <td><strong>Status:</strong></td>
-                        <td>{getStatusBadge(selectedOrder.status)}</td>
-                      </tr>
-                      {selectedOrder.cashierName && (
-                        <tr>
-                          <td><strong>Cashier:</strong></td>
-                          <td>{selectedOrder.cashierName}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="col-md-6">
-                  <h6>Customer Information</h6>
-                  <table className="table table-sm">
-                    <tbody>
-                      <tr>
-                        <td><strong>Name:</strong></td>
-                        <td>{selectedOrder.customer.name || selectedOrder.customer.username}</td>
-                      </tr>
-                      {selectedOrder.customer.email && (
-                        <tr>
-                          <td><strong>Email:</strong></td>
-                          <td>{selectedOrder.customer.email}</td>
-                        </tr>
-                      )}
-                      {selectedOrder.customer.phone && (
-                        <tr>
-                          <td><strong>Phone:</strong></td>
-                          <td>{selectedOrder.customer.phone}</td>
-                        </tr>
-                      )}
-                      {selectedOrder.customer.address && (
-                        <tr>
-                          <td><strong>Address:</strong></td>
-                          <td style={{maxWidth: '200px', wordBreak: 'break-word'}}>{selectedOrder.customer.address}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="row mb-3">
-                <div className="col-12">
-                  <h6>Order Items</h6>
-                  <div className="table-responsive">
-                    <table className="table table-striped table-sm">
-                      <thead>
-                        <tr>
-                          <th>Product</th>
-                          <th>Price</th>
-                          <th>Quantity</th>
-                          <th>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {/* made some changes here */}
-                        {items.map((item, index) => (
-                            <tr key={item.id || index}>
-                            <td>{item.displayName || item.name}</td>
-                            <td>₱{Number(item.price || 0).toLocaleString()}</td>
-                            <td>{Number(item.quantity || 0)}</td>
-                            <td>₱{(Number(item.price || 0) * Number(item.quantity || 0)).toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        {selectedOrder.shipping && selectedOrder.shipping.fee > 0 && (
-                          <tr>
-                            <td colSpan="3"><strong>Shipping:</strong></td>
-                            <td>₱{selectedOrder.shipping.fee.toLocaleString()}</td>
-                          </tr>
-                        )}
-                        <tr>
-                          <td colSpan="3"><strong>Total:</strong></td>
-                          <td><strong>₱{selectedOrder.total.toLocaleString()}</strong></td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              {selectedOrder.shipping && (
-                <div className="row mb-3">
-                  <div className="col-12">
-                    <h6>Shipping Information</h6>
-                    <p><strong>Method:</strong> {
-                      selectedOrder.shipping.name || 
-                      (selectedOrder.shipping.method === 'customer_delivery' ? 'Customer Arranged Delivery' : 
-                       selectedOrder.shipping.method === 'pickup' ? 'Store Pickup' : selectedOrder.shipping.method)
-                    }</p>
-                    <p><strong>Estimated:</strong> {selectedOrder.shipping.estimatedDays}</p>
-                  </div>
-                </div>
-              )}
-
-              <div className="row mb-3">
-               <div className="col-12">
-              <h6>Payment Information</h6>
-             <p>
-              <strong>Method:</strong>{" "}
-              {(selectedOrder.payment?.method || '').toUpperCase()}
-             </p>
-                <p>
-                  <strong>Status:</strong>{" "}
-                  {getStatusBadge(selectedOrder.payment?.status || '')}
-                 </p>
-                   {selectedOrder.paymentProof && (
-                  <p>
-                  <strong>Payment Proof:</strong> {selectedOrder.paymentProof}
-                </p>
-                )}
-              </div>
-            </div>
-
-              {selectedOrder.notes && (
-                <div className="row">
-                  <div className="col-12">
-                    <h6>Order Notes</h6>
-                    <p className="text-muted">{selectedOrder.notes}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <div className="me-auto">
-                <select 
-                  className="form-select form-select-sm"
-                  value={selectedOrder.status}
-                  onChange={(e) => {
-                    updateOrderStatus(selectedOrder.orderId, e.target.value);
-                    setSelectedOrder({...selectedOrder, status: e.target.value});
-                  }}
-                >
-                  <option value="pending">Pending</option>
-                  <option value="processing">Processing</option>
-                  <option value="ready">Ready</option>
-                  <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedOrder(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+};
 
   return (
     <div className="container-fluid bg-light min-vh-100">
@@ -458,7 +743,7 @@ const ensureItemsArray = (items) => {
                             </td>
                             <td className="text-center">
                               <span className="badge bg-light text-dark">
-                                {order.items.length} item{order.items.length !== 1 ? 's' : ''}
+                                {order.totalQuantity} item{order.totalQuantity !== 1 ? 's' : ''}
                               </span>
                             </td>
                             <td className="text-center">
@@ -492,11 +777,7 @@ const ensureItemsArray = (items) => {
                     </tbody>
                   </table>
                 </div>
-              </div>
-              
-              {/* Summary Footer */}
-              {filteredOrders.length > 0 && renderSummaryFooter()}
-              
+              </div>  
             </div>
           </div>
         </div>
