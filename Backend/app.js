@@ -2,10 +2,10 @@ const express = require("express");
 const mysql = require("mysql");
 const multer = require('multer');
 const path = require('path');
-const nodemailer = require('nodemailer');
 const fs = require('fs'); 
+const { Resend } = require('resend'); //instead sa nodemailer pinalitan ko netong resend
 
-
+const resend = new Resend('re_b8uAGJPn_LaHZdDeDiQxZ8zacmvXXXLdW');
 
 // Set up multer for file uploads
 const app = express();
@@ -48,23 +48,19 @@ const storage = multer.diskStorage({
 // Middleware to handle image uploads
 const upload = multer({ storage: storage });
 
-// Email from nodemailer configuration (2-step verification acquired)
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: 'omgeesbakerysupplies@gmail.com', // Replace with your Gmail
-    pass: 'lmzh ncjl chvn iulw' // Replace with your app password (no spaces)
-  }
-});
 
-// Store verification codes temporarily (in production, use Redis or database)
+// Store verification codes temporarily
 const verificationCodes = new Map();
 
 async function sendInvoiceEmail(invoiceData, invoicePath) {
     try {
-        const mailOptions = {
-            from: 'omgeesbakerysupplies@gmail.com',
-            to: invoiceData.customer.email,
+        // Read the PDF file as base64
+        const pdfBuffer = fs.readFileSync(invoicePath);
+        const pdfBase64 = pdfBuffer.toString('base64');
+
+        const { data, error } = await resend.emails.send({
+            from: 'OMGees <noreply@omgees.tech>', 
+            to: [invoiceData.customer.email],
             subject: `OMGees - Order Invoice #${invoiceData.orderNumber}`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -101,13 +97,19 @@ async function sendInvoiceEmail(invoiceData, invoicePath) {
             attachments: [
                 {
                     filename: `Invoice-${invoiceData.orderNumber}.pdf`,
-                    path: invoicePath
+                    content: pdfBase64
                 }
             ]
-        };
-        
-        await transporter.sendMail(mailOptions);
+        });
+
+        if (error) {
+            throw new Error(error.message);
+        }
+
         console.log(`✅ Invoice email sent to: ${invoiceData.customer.email}`);
+        console.log(`📧 Email ID: ${data.id}`);
+        
+        return data;
     } catch (error) {
         console.error('❌ Failed to send invoice email:', error.message);
         throw error;
@@ -132,52 +134,56 @@ app.post('/send-verification-code', async (req, res) => {
     // Store code with expiration (10 minutes)
     verificationCodes.set(email, {
         code: code,
-        expires: Date.now() + 10 * 60 * 1000 // 10 minutes
+        expires: Date.now() + 10 * 60 * 1000
     });
     
-    // Email content
-    const mailOptions = {
-        from: 'omgeesbakerysupplies@gmail.com', // Replace with your Gmail
-        to: email,
-        subject: 'OMGees - Email Verification Code',
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-                <div style="text-align: center; margin-bottom: 30px;">
-                    <h1 style="color: #333;">OMGees</h1>
-                </div>
-                
-                <div style="background-color: #f5f5f5; padding: 30px; border-radius: 10px;">
-                    <h2 style="color: #333; margin-bottom: 20px;">Verify Your Email Address</h2>
-                    
-                    <p style="color: #666; font-size: 16px; line-height: 1.5;">
-                        Thank you for registering with OMGees! Please use the verification code below to complete your registration:
-                    </p>
-                    
-                    <div style="background-color: #fff; padding: 20px; border-radius: 5px; text-align: center; margin: 30px 0;">
-                        <h1 style="color: #007bff; font-size: 36px; letter-spacing: 8px; margin: 0;">
-                            ${code}
-                        </h1>
+    try {
+        const { data, error } = await resend.emails.send({
+            from: 'OMGees <noreply@omgees.tech>', 
+            to: [email],
+            subject: 'OMGees - Email Verification Code',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="text-align: center; margin-bottom: 30px;">
+                        <h1 style="color: #333;">OMGees</h1>
                     </div>
                     
-                    <p style="color: #666; font-size: 14px;">
-                        This code will expire in <strong>10 minutes</strong>.
-                    </p>
+                    <div style="background-color: #f5f5f5; padding: 30px; border-radius: 10px;">
+                        <h2 style="color: #333; margin-bottom: 20px;">Verify Your Email Address</h2>
+                        
+                        <p style="color: #666; font-size: 16px; line-height: 1.5;">
+                            Thank you for registering with OMGees! Please use the verification code below to complete your registration:
+                        </p>
+                        
+                        <div style="background-color: #fff; padding: 20px; border-radius: 5px; text-align: center; margin: 30px 0;">
+                            <h1 style="color: #007bff; font-size: 36px; letter-spacing: 8px; margin: 0;">
+                                ${code}
+                            </h1>
+                        </div>
+                        
+                        <p style="color: #666; font-size: 14px;">
+                            This code will expire in <strong>10 minutes</strong>.
+                        </p>
+                        
+                        <p style="color: #666; font-size: 14px;">
+                            If you didn't request this code, please ignore this email.
+                        </p>
+                    </div>
                     
-                    <p style="color: #666; font-size: 14px;">
-                        If you didn't request this code, please ignore this email.
-                    </p>
+                    <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px;">
+                        <p>© ${new Date().getFullYear()} OMGees. All rights reserved.</p>
+                    </div>
                 </div>
-                
-                <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px;">
-                    <p>© ${new Date().getFullYear()} OMGees. All rights reserved.</p>
-                </div>
-            </div>
-        `
-    };
-    
-    try {
-        await transporter.sendMail(mailOptions);
+            `
+        });
+
+        if (error) {
+            throw new Error(error.message);
+        }
+
         console.log(`✅ Verification code sent to: ${email}`);
+        console.log(`📧 Email ID: ${data.id}`);
+        
         res.json({ 
             success: true, 
             message: 'Verification code sent successfully' 
@@ -191,7 +197,7 @@ app.post('/send-verification-code', async (req, res) => {
     }
 });
 
-// Verify the code
+// Verify the code (no changes needed)
 app.post('/verify-code', (req, res) => {
     const { email, code } = req.body;
     
@@ -214,7 +220,6 @@ app.post('/verify-code', (req, res) => {
         });
     }
     
-    // Check expiration
     if (Date.now() > storedData.expires) {
         console.log('❌ Code expired');
         verificationCodes.delete(email);
@@ -224,10 +229,9 @@ app.post('/verify-code', (req, res) => {
         });
     }
     
-    // Verify code
     if (storedData.code === code) {
         console.log('✅ Code verified successfully');
-        verificationCodes.delete(email); // Remove code after successful verification
+        verificationCodes.delete(email);
         return res.json({ 
             valid: true, 
             message: 'Email verified successfully' 
@@ -1962,7 +1966,6 @@ app.post('/save-delivery-info', (req, res) => {
     });
 });
 
-// Send delivery notification email to customer
 app.post('/send-delivery-notification', async (req, res) => {
     const {
         order_id,
@@ -1989,9 +1992,9 @@ app.post('/send-delivery-notification', async (req, res) => {
             minute: '2-digit'
         });
 
-        const mailOptions = {
-            from: 'omgeesbakerysupplies@gmail.com',
-            to: customer_email,
+        const { data, error } = await resend.emails.send({
+            from: 'OMGees <noreply@omgees.tech>', 
+            to: [customer_email],
             subject: `OMGees - Your Order is Out for Delivery! 📦`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -2001,8 +2004,7 @@ app.post('/send-delivery-notification', async (req, res) => {
                     
                     <div style="background-color: #f5f5f5; padding: 30px; border-radius: 10px;">
                         <h2 style="color: #1b3eefff; margin-bottom: 20px;">
-                            <i style="display: inline; margin-right: 10px;">📦</i>
-                            Your Order is Out for Delivery!
+                            📦 Your Order is Out for Delivery!
                         </h2>
                         
                         <p style="color: #666; font-size: 16px; line-height: 1.5;">
@@ -2060,10 +2062,14 @@ app.post('/send-delivery-notification', async (req, res) => {
                     </div>
                 </div>
             `
-        };
+        });
 
-        await transporter.sendMail(mailOptions);
+        if (error) {
+            throw new Error(error.message);
+        }
+
         console.log(`✅ Delivery notification sent to: ${customer_email}`);
+        console.log(`📧 Email ID: ${data.id}`);
         
         res.json({ success: true, message: 'Notification email sent' });
     } catch (error) {

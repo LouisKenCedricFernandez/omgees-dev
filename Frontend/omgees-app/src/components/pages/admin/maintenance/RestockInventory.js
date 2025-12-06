@@ -47,7 +47,7 @@ function RestockInventory({
           // Activity Log
           axios.post('http://localhost:5000/activity-log', {
             activity: 'Updated Product',
-            user: 'inventory-staff',
+            user: 'admin',
             type: 'inventory',
             details: `Product: ${updatedProduct.product_name || updatedProduct.name} (${updatedProduct.product_variant || updatedProduct.size}), New Stock: ${updatedProduct.product_totalstock || updatedProduct.stock}`,
             timestamp: new Date().toISOString()

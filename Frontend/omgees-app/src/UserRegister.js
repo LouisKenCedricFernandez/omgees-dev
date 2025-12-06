@@ -247,7 +247,6 @@ function UserRegister() {
                     <small>{success}</small>
                   </div>
                 )}
-
                 <div>
                   <div className="mb-3">
                     <label htmlFor="verificationCode" className="form-label fw-semibold small">
@@ -291,26 +290,28 @@ function UserRegister() {
                     )}
                   </button>
 
-                  <div className="text-center small mb-0">
+                  <div className="text-center mb-0">
                     <button
                       type="button"
-                      className="btn btn-link text-decoration-none small"
+                      className="btn btn-link text-decoration-none p-1"
                       onClick={handleResendCode}
                       disabled={loading}
+                      style={{ fontSize: '0.75rem' }}
                     >
-                      <i className="bi bi-arrow-clockwise me-1"></i>
+                      <i className="bi bi-arrow-clockwise me-1" style={{ fontSize: '0.75rem' }}></i>
                       Didn't receive code? Resend
                     </button>
                   </div>
                 </div>
 
-                <p className="text-center small mb-0">
+                <p className="text-center mb-0">
                   <button
                     type="button"
-                    className="btn btn-link text-decoration-none small"
+                    className="btn btn-link text-decoration-none p-1"
                     onClick={() => setStep('register')}
+                    style={{ fontSize: '0.75rem' }}
                   >
-                    <i className="bi bi-arrow-left me-1"></i>
+                    <i className="bi bi-arrow-left me-1" style={{ fontSize: '0.75rem' }}></i>
                     Back to Registration
                   </button>
                 </p>
